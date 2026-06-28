@@ -212,6 +212,17 @@ Leave both fields empty to disable this feature entirely — sessions are still 
 
 ---
 
+## Donate
+
+If this project saved you money on a paid plan, consider buying me a coffee.
+
+**USDT (TRC20 / Tron)**
+```
+TNF3Cg6TfAiGTGsLq5Nx79KATiUkHmDqjD
+```
+
+---
+
 ## License
 
 MIT
