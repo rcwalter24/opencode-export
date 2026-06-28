@@ -26,7 +26,14 @@ $uri    = '/' . ltrim($uri, '/');
 if ($method === 'POST' && $uri === '/api/upload') {
     auth_check($cfg);
 
-    $raw  = file_get_contents('php://input');
+    $maxBytes = 32 * 1024 * 1024;
+    $raw = file_get_contents('php://input', false, null, 0, $maxBytes + 1);
+    if (strlen($raw) > $maxBytes) {
+        http_response_code(413);
+        header('Content-Type: application/json');
+        echo json_encode(['error' => 'payload too large (max 32 MB)']);
+        exit;
+    }
     $data = json_decode($raw, true);
 
     if (!is_array($data)) {

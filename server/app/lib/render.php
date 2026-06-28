@@ -111,8 +111,11 @@ function render_file_part(array $part): string {
         $html .= ' <span class="file-mime">(' . $mime . ')</span>';
     }
     if ($url) {
-        $safeUrl = htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
-        $html .= ' <a href="' . $safeUrl . '" target="_blank" rel="noopener noreferrer">Open</a>';
+        if (preg_match('#^https?://#i', $url)) {
+            $html .= ' <a href="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '" target="_blank" rel="noopener noreferrer">Open</a>';
+        } else {
+            $html .= ' <span class="file-mime">' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '</span>';
+        }
     }
     $html .= '</div>';
     return $html;
@@ -130,5 +133,5 @@ function format_ts(int $ts): string {
     if ($ts > 1e12) {
         $ts = intdiv($ts, 1000);
     }
-    return date('Y-m-d H:i:s', $ts) . ' UTC';
+    return gmdate('Y-m-d H:i:s', $ts) . ' UTC';
 }
