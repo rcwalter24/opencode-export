@@ -1,0 +1,506 @@
+#!/usr/bin/env bash
+# opencode-export — Export and share OpenCode sessions
+#
+# Reads session data directly from the local OpenCode SQLite database.
+#
+# Subcommands:
+#   list                          List recent local sessions
+#   show <session_id>             Print session as Markdown to stdout
+#   upload <session_id>           Upload session to share server, print URL
+#   shares [-s <keyword>] [-n N]  List sessions already shared on the server
+#   delete <slug|url>             Delete a shared session by slug or URL
+#   purge                         Delete ALL shared sessions from the server
+#
+# Defaults:
+#   With no arguments, runs `list`.
+#   A bare session_id is treated as `show` (legacy convenience).
+#
+# Config file: ~/.config/opencode-export/config
+#   SHARE_URL=https://share.example.com
+#   SHARE_TOKEN=your-bearer-token
+#
+# Env:
+#   OPENCODE_DB   override database path (default ~/.local/share/opencode/opencode.db)
+#
+# Dependencies: sqlite3, jq, curl
+
+set -euo pipefail
+
+print_help() {
+    cat <<EOF
+Usage:
+  $(basename "$0") list [-s <keyword>] [-n <count>]
+        List recent sessions (default 20). -s filters by title.
+
+  $(basename "$0") show <session_id>
+        Print full session as Markdown to stdout.
+
+  $(basename "$0") upload <session_id>
+        Upload session to share server (sends JSON, server renders HTML).
+        Prints the share URL to stdout.
+
+  $(basename "$0") shares [-s <keyword>] [-n <count>]
+        List sessions already shared on the server.
+        -s filters by title, -n limits output (default: all).
+
+  $(basename "$0") delete <slug|url>
+        Remove a shared session from the server.
+
+  $(basename "$0") purge
+        Delete ALL shared sessions from the server (asks for confirmation).
+
+Env:
+  OPENCODE_DB   override database path
+EOF
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help) print_help; exit 0 ;;
+    esac
+done
+
+DB="${OPENCODE_DB:-$HOME/.local/share/opencode/opencode.db}"
+CONFIG_FILE="$HOME/.config/opencode-export/config"
+
+die() { echo "error: $*" >&2; exit 1; }
+
+# Load config if present
+if [[ -f "$CONFIG_FILE" ]]; then
+    # shellcheck disable=SC1090
+    set -a; source "$CONFIG_FILE"; set +a
+fi
+
+command -v sqlite3 >/dev/null || die "sqlite3 is required"
+command -v jq      >/dev/null || die "jq is required (brew install jq)"
+command -v curl    >/dev/null || die "curl is required"
+
+need_db() { [[ -f "$DB" ]] || die "database not found: $DB"; }
+
+sq() { sqlite3 -readonly "$DB" "$@"; }
+
+sql_escape() { printf '%s' "${1//\'/\'\'}"; }
+
+# ---------- list ----------
+cmd_list() {
+    need_db
+    local limit=20 search=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -s|--search) search="$2"; shift 2 ;;
+            -n|--limit)  limit="$2";  shift 2 ;;
+            *)           die "unknown option to list: $1" ;;
+        esac
+    done
+
+    local where=""
+    if [[ -n "$search" ]]; then
+        where="WHERE title LIKE '%$(sql_escape "$search")%'"
+    fi
+    sq <<SQL
+.mode column
+.headers off
+SELECT
+    id,
+    datetime(time_created/1000, 'unixepoch', 'localtime'),
+    title
+FROM session
+${where}
+ORDER BY time_created DESC
+LIMIT ${limit};
+SQL
+}
+
+# ---------- show (markdown to stdout) ----------
+render_part_md() {
+    jq -r '
+        def code(lang): "```" + (lang // "") + "\n" + . + "\n```";
+        def fmt_json: tojson | code("json");
+
+        if   .type == "text"        then .text
+        elif .type == "reasoning"   then
+            if (.text // "") == "" then ""
+            else "\n<details><summary>💭 Reasoning</summary>\n\n" + .text + "\n\n</details>\n"
+            end
+        elif .type == "tool"        then
+            "\n### 🔧 Tool: `" + (.tool // "?") + "` (" + (.state.status // "?") + ")\n"
+            + (if .state.input  then "\n**Input:**\n"  + (.state.input | fmt_json)                else "" end)
+            + (if .state.output then "\n\n**Output:**\n```\n" + (.state.output | tostring) + "\n```" else "" end)
+            + (if .state.error  then "\n\n**Error:** " + (.state.error | tostring)               else "" end)
+        elif .type == "file"        then
+            "\n📎 **Attachment**: `" + (.filename // .name // "(unnamed)") + "` "
+            + "(" + (.mime // "") + ") " + (.url // "")
+        elif .type == "step-start"  then ""
+        elif .type == "step-finish" then ""
+        elif .type == "compaction"  then
+            "\n---\n\n> 🗜️ **Compaction point** "
+            + (if .auto then "(automatic)" else "(manual /compact)" end)
+            + (if .tail_start_id then " · tail start: `" + .tail_start_id + "`" else "" end)
+            + "\n>\n> _Messages before this point have been compacted into a summary. The full tail follows._\n\n---\n"
+        else
+            "\n<details><summary>⚠️ Unknown part type: `" + (.type // "null") + "`</summary>\n\n"
+            + (. | tojson | code("json")) + "\n\n</details>\n"
+        end
+    '
+}
+
+cmd_show() {
+    need_db
+    local sid="${1:-}"
+    [[ -n "$sid" ]] || die "usage: show <session_id>"
+    local esid; esid=$(sql_escape "$sid")
+    local exists; exists=$(sq "SELECT COUNT(*) FROM session WHERE id='${esid}';")
+    [[ "$exists" -gt 0 ]] || die "session not found: $sid"
+
+    sq <<SQL | jq -r '.[0] |
+        "# " + .title + "\n\n"
+        + "- **Session ID**: `" + .id + "`\n"
+        + "- **Created**: " + (.created // "") + "\n"
+        + (if .directory then "- **Directory**: `" + .directory + "`\n" else "" end)
+        + (if .agent     then "- **Agent**: "     + .agent     + "\n" else "" end)
+        + (if .model     then "- **Model**: "     + .model     + "\n" else "" end)
+        + "- **Tokens**: input=" + (.tokens_input|tostring)
+        + ", output=" + (.tokens_output|tostring)
+        + ", cost=$" + (.cost | . * 10000 | round / 10000 | tostring)
+        + "\n\n---"
+    '
+.mode json
+SELECT
+    id, title,
+    datetime(time_created/1000, 'unixepoch', 'localtime') AS created,
+    directory, agent, model, cost, tokens_input, tokens_output
+FROM session WHERE id='${esid}';
+SQL
+
+    local mids
+    mids=$(sq "SELECT id FROM message WHERE session_id='${esid}' ORDER BY time_created, id;")
+
+    while IFS= read -r mid; do
+        [[ -z "$mid" ]] && continue
+        local emid; emid=$(sql_escape "$mid")
+        local mdata mtime
+        mdata=$(sq "SELECT data FROM message WHERE id='${emid}';")
+        mtime=$(sq "SELECT datetime(time_created/1000, 'unixepoch', 'localtime') FROM message WHERE id='${emid}';")
+
+        local header
+        header=$(echo "$mdata" | jq -r --arg t "$mtime" '
+            (if .role == "user" then "## 🧑 User" else "## 🤖 Assistant" end) as $h
+            | (.model // {providerID: .providerID, modelID: .modelID}) as $m
+            | (if ($m.modelID // null) != null
+                then $h + "  ·  " + ($m.providerID // "?") + "/" + $m.modelID
+                else $h end)
+            + "\n*" + $t + "*\n"
+        ')
+
+        echo
+        echo '================================================================================'
+        echo "$header"
+
+        sq "SELECT data FROM part WHERE message_id='${emid}' ORDER BY time_created, id;" \
+            | while IFS= read -r pdata; do
+                [[ -z "$pdata" ]] && continue
+                echo "$pdata" | render_part_md
+                echo
+            done
+
+        echo "$mdata" | jq -r '
+            if .role == "assistant" then
+                "\n> _tokens: in=" + ((.tokens.input // 0)|tostring)
+                + " out=" + ((.tokens.output // 0)|tostring)
+                + " reasoning=" + ((.tokens.reasoning // 0)|tostring)
+                + (if .cost != null then " · cost=$" + (.cost | . * 10000 | round / 10000 | tostring) else "" end)
+                + (if .finish then " · finish=" + .finish else "" end)
+                + "_"
+            else empty end
+        '
+    done <<< "$mids"
+}
+
+# ---------- upload (JSON payload, server renders HTML) ----------
+build_payload() {
+    local sid="$1"
+    local esid; esid=$(sql_escape "$sid")
+
+    local tmpdir; tmpdir=$(mktemp -d)
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmpdir'" RETURN
+
+    sq <<SQL | jq '.[0] // null' > "$tmpdir/session.json"
+.mode json
+SELECT
+    id, title, time_created,
+    directory, agent, model, cost, tokens_input, tokens_output, tokens_reasoning
+FROM session WHERE id='${esid}';
+SQL
+    [[ "$(cat "$tmpdir/session.json")" == "null" ]] && die "session not found: $sid"
+
+    sq <<SQL > "$tmpdir/messages.json"
+.mode json
+SELECT id, session_id, time_created, data
+FROM message WHERE session_id='${esid}'
+ORDER BY time_created, id;
+SQL
+    [[ ! -s "$tmpdir/messages.json" ]] && printf '[]' > "$tmpdir/messages.json"
+
+    sq <<SQL > "$tmpdir/parts.json"
+.mode json
+SELECT id, message_id, time_created, data
+FROM part WHERE session_id='${esid}'
+ORDER BY time_created, id;
+SQL
+    [[ ! -s "$tmpdir/parts.json" ]] && printf '[]' > "$tmpdir/parts.json"
+
+    # --slurpfile wraps each file in an array, so use [0] to unwrap
+    jq -n \
+        --slurpfile session  "$tmpdir/session.json" \
+        --slurpfile messages "$tmpdir/messages.json" \
+        --slurpfile parts    "$tmpdir/parts.json" '
+        ($session[0])  as $session  |
+        ($messages[0]) as $messages |
+        ($parts[0])    as $parts    |
+        ($parts
+            | map(. + {parsed: (.data | fromjson)})
+            | group_by(.message_id)
+            | map({key: .[0].message_id, value: (map(.parsed))})
+            | from_entries
+        ) as $partsByMsg
+        |
+        {
+            session_id:  $session.id,
+            title:       $session.title,
+            created_at:  $session.time_created,
+            directory:   $session.directory,
+            agent:       $session.agent,
+            model:       $session.model,
+            tokens: {
+                input:     ($session.tokens_input     // 0),
+                output:    ($session.tokens_output    // 0),
+                reasoning: ($session.tokens_reasoning // 0)
+            },
+            cost: ($session.cost // 0),
+            messages: (
+                $messages | map(
+                    (.data | fromjson) as $d
+                    | {
+                        id:           .id,
+                        time_created: .time_created,
+                        role:         $d.role,
+                        model:        ($d.model // (
+                            if ($d.providerID // $d.modelID) then
+                              {providerID: $d.providerID, modelID: $d.modelID}
+                            else null end
+                        )),
+                        tokens: $d.tokens,
+                        cost:   $d.cost,
+                        finish: $d.finish,
+                        parts:  ($partsByMsg[.id] // [])
+                    }
+                )
+            )
+        }
+    '
+}
+
+cmd_upload() {
+    local sid="${1:-}"
+    [[ -n "$sid" ]] || die "usage: upload <session_id>"
+    need_db
+    [[ -n "${SHARE_URL:-}"   ]] || die "SHARE_URL not configured (see ~/.config/opencode-export/config)"
+    [[ -n "${SHARE_TOKEN:-}" ]] || die "SHARE_TOKEN not configured"
+
+    local payload
+    payload=$(build_payload "$sid")
+
+    local tmpdir; tmpdir=$(mktemp -d)
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmpdir'" RETURN
+    local body_file="$tmpdir/payload.json"
+    local resp_file="$tmpdir/response.json"
+    printf '%s' "$payload" > "$body_file"
+
+    local http_code
+    http_code=$(curl -sS -X POST \
+        -H "Authorization: Bearer $SHARE_TOKEN" \
+        -H "Content-Type: application/json" \
+        --data-binary "@$body_file" \
+        -o "$resp_file" \
+        -w '%{http_code}' \
+        "${SHARE_URL%/}/api/upload") || die "upload failed (curl error)"
+
+    if [[ "$http_code" != "200" && "$http_code" != "201" ]]; then
+        echo "server returned HTTP $http_code:" >&2
+        cat "$resp_file" >&2; echo >&2
+        die "upload failed"
+    fi
+
+    local url short_url
+    url=$(jq -r '.url // empty' < "$resp_file")
+    short_url=$(jq -r '.short_url // empty' < "$resp_file")
+    [[ -n "$url" ]] || { cat "$resp_file" >&2; die "unexpected response (no url)"; }
+
+    # stderr: human-friendly summary
+    echo "✓ uploaded" >&2
+    echo "  full:  $url" >&2
+    if [[ -n "$short_url" ]]; then
+        echo "  short: $short_url  (expires in 7 days)" >&2
+    fi
+
+    # stdout: short URL if present (more useful to copy), else full URL
+    if [[ -n "$short_url" ]]; then
+        echo "$short_url"
+    else
+        echo "$url"
+    fi
+}
+
+# ---------- shares (list server-side shared sessions) ----------
+cmd_shares() {
+    [[ -n "${SHARE_URL:-}"   ]] || die "SHARE_URL not configured"
+    [[ -n "${SHARE_TOKEN:-}" ]] || die "SHARE_TOKEN not configured"
+
+    local limit=0 search=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -s|--search) search="$2"; shift 2 ;;
+            -n|--limit)  limit="$2";  shift 2 ;;
+            *) die "unknown option to shares: $1" ;;
+        esac
+    done
+
+    local resp_file; resp_file=$(mktemp)
+    # shellcheck disable=SC2064
+    trap "rm -f '$resp_file'" RETURN
+
+    local http_code
+    http_code=$(curl -sS \
+        -H "Authorization: Bearer $SHARE_TOKEN" \
+        -o "$resp_file" \
+        -w '%{http_code}' \
+        "${SHARE_URL%/}/api/sessions") || die "request failed (curl error)"
+
+    if [[ "$http_code" != "200" ]]; then
+        echo "server returned HTTP $http_code:" >&2
+        cat "$resp_file" >&2; echo >&2
+        die "shares failed"
+    fi
+
+    local jq_filter
+    if [[ -n "$search" ]]; then
+        jq_filter='[ .[] | select(.title | ascii_downcase | contains($s | ascii_downcase)) ] |
+            .[] | [ (.updated_at | strftime("%Y-%m-%d %H:%M")), .slug, .url, (.short_url // ""), .title ] | @tsv'
+    else
+        jq_filter='.[] | [ (.updated_at | strftime("%Y-%m-%d %H:%M")), .slug, .url, (.short_url // ""), .title ] | @tsv'
+    fi
+
+    local result
+    result=$(jq -r --arg s "$search" "$jq_filter" < "$resp_file")
+
+    if [[ -z "$result" ]]; then
+        echo "(no shared sessions)"
+        return
+    fi
+
+    if [[ "$limit" -gt 0 ]]; then
+        result=$(echo "$result" | head -n "$limit")
+    fi
+
+    while IFS=$'\t' read -r updated slug url short_url title; do
+        printf "%s  %s  %s\n" "$updated" "$slug" "$title"
+        printf "    %s\n" "$url"
+        if [[ -n "$short_url" ]]; then
+            printf "    %s\n" "$short_url"
+        fi
+    done <<< "$result"
+}
+
+# ---------- purge (delete all shared sessions) ----------
+cmd_purge() {
+    [[ -n "${SHARE_URL:-}"   ]] || die "SHARE_URL not configured"
+    [[ -n "${SHARE_TOKEN:-}" ]] || die "SHARE_TOKEN not configured"
+
+    # Count first
+    local resp_file; resp_file=$(mktemp)
+    # shellcheck disable=SC2064
+    trap "rm -f '$resp_file'" RETURN
+
+    local http_code
+    http_code=$(curl -sS \
+        -H "Authorization: Bearer $SHARE_TOKEN" \
+        -o "$resp_file" \
+        -w '%{http_code}' \
+        "${SHARE_URL%/}/api/sessions") || die "request failed (curl error)"
+
+    [[ "$http_code" == "200" ]] || { cat "$resp_file" >&2; die "purge failed (HTTP $http_code)"; }
+
+    local count
+    count=$(jq 'length' < "$resp_file")
+
+    if [[ "$count" -eq 0 ]]; then
+        echo "Nothing to delete."
+        return
+    fi
+
+    printf "About to delete %d shared session(s). Type YES to confirm: " "$count"
+    local confirm; read -r confirm
+    [[ "$confirm" == "YES" ]] || { echo "Aborted."; exit 0; }
+
+    http_code=$(curl -sS -X DELETE \
+        -H "Authorization: Bearer $SHARE_TOKEN" \
+        -o "$resp_file" \
+        -w '%{http_code}' \
+        "${SHARE_URL%/}/api/sessions") || die "purge failed (curl error)"
+
+    case "$http_code" in
+        200) echo "✓ deleted $(jq '.deleted' < "$resp_file") session(s)" ;;
+        204) echo "✓ all sessions deleted" ;;
+        *)   cat "$resp_file" >&2; die "purge failed (HTTP $http_code)" ;;
+    esac
+}
+
+# ---------- delete ----------
+cmd_delete() {
+    local slug="${1:-}"
+    [[ -n "$slug" ]] || die "usage: delete <slug|url>"
+    [[ -n "${SHARE_URL:-}"   ]] || die "SHARE_URL not configured"
+    [[ -n "${SHARE_TOKEN:-}" ]] || die "SHARE_TOKEN not configured"
+
+    if [[ "$slug" == http* ]]; then
+        slug="${slug##*/}"
+    fi
+
+    # Sanity check: slug should be a short token, not contain slashes/spaces
+    if [[ ! "$slug" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        die "invalid slug format: $slug"
+    fi
+
+    local http_code
+    http_code=$(curl -sS -X DELETE \
+        -H "Authorization: Bearer $SHARE_TOKEN" \
+        -o /dev/null \
+        -w '%{http_code}' \
+        "${SHARE_URL%/}/api/share/$slug") || die "delete failed (curl error)"
+
+    case "$http_code" in
+        204|200) echo "✓ deleted: $slug" ;;
+        404)     die "not found: $slug" ;;
+        *)       die "delete failed (HTTP $http_code)" ;;
+    esac
+}
+
+# ---------- Dispatch ----------
+if [[ $# -eq 0 ]]; then
+    cmd_list
+    exit 0
+fi
+
+sub="$1"; shift
+case "$sub" in
+    list)             cmd_list "$@" ;;
+    show)             cmd_show "$@" ;;
+    upload)           cmd_upload "$@" ;;
+    shares)           cmd_shares "$@" ;;
+    purge)            cmd_purge  "$@" ;;
+    delete|rm)        cmd_delete "$@" ;;
+    ses_*)            cmd_show "$sub" ;;
+    *)                die "unknown subcommand: $sub (try -h)" ;;
+esac

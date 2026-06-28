@@ -1,0 +1,14 @@
+# Config with secrets — copy config.example.php and rename
+server/app/config.php
+
+# SQLite database
+server/app/data/*.db
+server/app/data/*.db-shm
+server/app/data/*.db-wal
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
