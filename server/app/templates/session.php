@@ -330,7 +330,10 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
 .ed-msg button:hover, .ed-part button:hover { color: var(--error); border-color: var(--border); background: var(--bg-card); }
 .ed-part button.ed-edit:hover { color: var(--accent); }
 .part { position: relative; }
-.ed-part { position: absolute; top: .35rem; right: .5rem; display: flex; gap: .2rem; z-index: 2; }
+/* in edit mode every part keeps a gutter on the right so the controls never cover content */
+.editing .part { padding-right: 3.4rem; }
+.ed-part { position: absolute; top: .3rem; right: 0; display: flex; gap: .1rem; z-index: 2; }
+.editing .part > .part-tool, .editing .part > .part-reasoning, .editing .part > .part-unknown, .editing .part > .part-compaction { margin-right: 0; }
 .part + .part > .part-text { margin-top: .75rem; }
 .ed-editor { margin: .5rem 0; }
 .ed-editor textarea { width: 100%; min-height: 8rem; max-height: 60vh; font-family: "SFMono-Regular", Consolas, Menlo, monospace;
@@ -369,7 +372,7 @@ dialog .link { font-family: monospace; word-break: break-all; }
 </head>
 <body>
 <?= theme_toggle() ?>
-<div class="page-wrapper">
+<div class="page-wrapper<?= $edit ? ' editing' : '' ?>">
 <?php if ($edit): ?>
   <div class="ed-bar" data-slug="<?= h($row['slug']) ?>">
     <span class="ed-title">&#x270E; Editing</span>
