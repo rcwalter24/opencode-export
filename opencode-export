@@ -6,7 +6,8 @@
 # Subcommands:
 #   list                          List recent local sessions
 #   show <session_id>             Print session as Markdown to stdout
-#   upload <session_id>           Upload session to share server, print URL
+#   upload <session_id> [-p]      Upload session to share server, print URL
+#                                 -p prompts for a password to protect the page
 #   shares [-s <keyword>] [-n N]  List sessions already shared on the server
 #   delete <slug|url>             Delete a shared session by slug or URL
 #   purge                         Delete ALL shared sessions from the server
@@ -35,9 +36,14 @@ Usage:
   $(basename "$0") show <session_id>
         Print full session as Markdown to stdout.
 
-  $(basename "$0") upload <session_id>
+  $(basename "$0") upload <session_id> [-p | --password-stdin | --clear-password]
         Upload session to share server (sends JSON, server renders HTML).
         Prints the share URL to stdout.
+          -p, --password     prompt for a password; viewers must enter it
+                             (raw JSON: curl -u :PASSWORD <url>/raw)
+          --password-stdin   read the password from stdin (for scripts)
+          --clear-password   remove password protection from an existing share
+        Re-uploading without any password flag keeps the current protection.
 
   $(basename "$0") shares [-s <keyword>] [-n <count>]
         List sessions already shared on the server.
@@ -67,6 +73,11 @@ die() { echo "error: $*" >&2; exit 1; }
 
 # Load config if present
 if [[ -f "$CONFIG_FILE" ]]; then
+    # The config holds the bearer token: warn if other users on this machine can read it.
+    perms=$(stat -f '%Lp' "$CONFIG_FILE" 2>/dev/null || stat -c '%a' "$CONFIG_FILE" 2>/dev/null || echo "")
+    if [[ -n "$perms" && "${perms: -2}" != "00" ]]; then
+        echo "warning: $CONFIG_FILE is readable by other users — run: chmod 600 $CONFIG_FILE" >&2
+    fi
     # shellcheck disable=SC1090
     set -a; source "$CONFIG_FILE"; set +a
 fi
@@ -77,9 +88,38 @@ command -v curl    >/dev/null || die "curl is required"
 
 need_db() { [[ -f "$DB" ]] || die "database not found: $DB"; }
 
+# Temp files are registered here and removed on exit, including on `die`.
+_TMP=()
+cleanup() { rm -rf ${_TMP[@]+"${_TMP[@]}"}; }
+trap cleanup EXIT
+tmp_dir()  { TMP_RESULT=$(mktemp -d); _TMP+=("$TMP_RESULT"); }
+tmp_file() { TMP_RESULT=$(mktemp);    _TMP+=("$TMP_RESULT"); }
+
 sq() { sqlite3 -readonly "$DB" "$@"; }
 
 sql_escape() { printf '%s' "${1//\'/\'\'}"; }
+
+is_uint() { [[ "$1" =~ ^[0-9]+$ ]]; }
+
+need_server() {
+    [[ -n "${SHARE_URL:-}"   ]] || die "SHARE_URL not configured (see ~/.config/opencode-export/config)"
+    [[ -n "${SHARE_TOKEN:-}" ]] || die "SHARE_TOKEN not configured"
+}
+
+# curl wrapper: bearer auth, sane timeouts, prints HTTP status; body goes to $1.
+# The Authorization header goes through a private temp file (curl -H @file) so
+# the token never shows up in the process list.
+api_call() {
+    local out="$1"; shift
+    tmp_file; local hdr="$TMP_RESULT"
+    chmod 600 "$hdr"
+    printf 'Authorization: Bearer %s\n' "$SHARE_TOKEN" > "$hdr"
+    local code rc=0
+    code=$(curl -sS --max-time 120 -H "@$hdr" -o "$out" -w '%{http_code}' "$@") || rc=$?
+    rm -f "$hdr"
+    [[ $rc -eq 0 ]] || return $rc
+    printf '%s' "$code"
+}
 
 # ---------- list ----------
 cmd_list() {
@@ -87,11 +127,12 @@ cmd_list() {
     local limit=20 search=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -s|--search) search="$2"; shift 2 ;;
-            -n|--limit)  limit="$2";  shift 2 ;;
+            -s|--search) search="${2:-}"; shift 2 ;;
+            -n|--limit)  limit="${2:-}";  shift 2 ;;
             *)           die "unknown option to list: $1" ;;
         esac
     done
+    is_uint "$limit" || die "-n expects a number"
 
     local where=""
     if [[ -n "$search" ]]; then
@@ -221,9 +262,7 @@ build_payload() {
     local sid="$1"
     local esid; esid=$(sql_escape "$sid")
 
-    local tmpdir; tmpdir=$(mktemp -d)
-    # shellcheck disable=SC2064
-    trap "rm -rf '$tmpdir'" RETURN
+    tmp_dir; local tmpdir="$TMP_RESULT"
 
     sq <<SQL | jq '.[0] // null' > "$tmpdir/session.json"
 .mode json
@@ -232,7 +271,7 @@ SELECT
     directory, agent, model, cost, tokens_input, tokens_output, tokens_reasoning
 FROM session WHERE id='${esid}';
 SQL
-    [[ "$(cat "$tmpdir/session.json")" == "null" ]] && die "session not found: $sid"
+    [[ -s "$tmpdir/session.json" && "$(cat "$tmpdir/session.json")" != "null" ]] || die "session not found: $sid"
 
     sq <<SQL > "$tmpdir/messages.json"
 .mode json
@@ -302,29 +341,62 @@ SQL
 }
 
 cmd_upload() {
-    local sid="${1:-}"
-    [[ -n "$sid" ]] || die "usage: upload <session_id>"
+    local sid="" pw_mode="keep"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--password)    pw_mode="prompt"; shift ;;
+            --password-stdin) pw_mode="stdin";  shift ;;
+            --clear-password) pw_mode="clear";  shift ;;
+            -*)               die "unknown option to upload: $1" ;;
+            *)                [[ -z "$sid" ]] || die "unexpected argument: $1"; sid="$1"; shift ;;
+        esac
+    done
+    [[ -n "$sid" ]] || die "usage: upload <session_id> [-p | --password-stdin | --clear-password]"
     need_db
-    [[ -n "${SHARE_URL:-}"   ]] || die "SHARE_URL not configured (see ~/.config/opencode-export/config)"
-    [[ -n "${SHARE_TOKEN:-}" ]] || die "SHARE_TOKEN not configured"
+    need_server
 
-    local payload
-    payload=$(build_payload "$sid")
-
-    local tmpdir; tmpdir=$(mktemp -d)
-    # shellcheck disable=SC2064
-    trap "rm -rf '$tmpdir'" RETURN
+    tmp_dir; local tmpdir="$TMP_RESULT"
     local body_file="$tmpdir/payload.json"
     local resp_file="$tmpdir/response.json"
-    printf '%s' "$payload" > "$body_file"
+    local pw_file="$tmpdir/password"
+
+    build_payload "$sid" > "$body_file"
+
+    # Password handling. The password is passed to jq via a file inside the
+    # private temp dir (never as an argument), and stripped by the server before
+    # the payload is stored.
+    local pw1 pw2
+    case "$pw_mode" in
+        prompt)
+            { exec 3< /dev/tty; } 2>/dev/null || die "-p needs an interactive terminal (use --password-stdin for scripts)"
+            read -r -s -u 3 -p "Password for this share: " pw1; echo >&2
+            read -r -s -u 3 -p "Confirm password: "        pw2; echo >&2
+            exec 3<&-
+            [[ "$pw1" == "$pw2" ]] || die "passwords do not match"
+            [[ ${#pw1} -ge 4 ]]    || die "password must be at least 4 characters"
+            printf '%s' "$pw1" > "$pw_file"
+            unset pw1 pw2
+            ;;
+        stdin)
+            IFS= read -r pw1 || true
+            [[ -n "$pw1" ]] || die "no password read from stdin"
+            printf '%s' "$pw1" > "$pw_file"
+            unset pw1
+            ;;
+        clear)
+            printf '' > "$pw_file"
+            ;;
+    esac
+    if [[ "$pw_mode" != "keep" ]]; then
+        jq --rawfile pw "$pw_file" '. + {password: (if $pw == "" then null else $pw end)}' \
+            "$body_file" > "$body_file.tmp" && mv "$body_file.tmp" "$body_file"
+        rm -f "$pw_file"
+    fi
 
     local http_code
-    http_code=$(curl -sS -X POST \
-        -H "Authorization: Bearer $SHARE_TOKEN" \
+    http_code=$(api_call "$resp_file" -X POST \
         -H "Content-Type: application/json" \
         --data-binary "@$body_file" \
-        -o "$resp_file" \
-        -w '%{http_code}' \
         "${SHARE_URL%/}/api/upload") || die "upload failed (curl error)"
 
     if [[ "$http_code" != "200" && "$http_code" != "201" ]]; then
@@ -333,9 +405,10 @@ cmd_upload() {
         die "upload failed"
     fi
 
-    local url short_url
+    local url short_url protected
     url=$(jq -r '.url // empty' < "$resp_file")
     short_url=$(jq -r '.short_url // empty' < "$resp_file")
+    protected=$(jq -r '.protected // false' < "$resp_file")
     [[ -n "$url" ]] || { cat "$resp_file" >&2; die "unexpected response (no url)"; }
 
     # stderr: human-friendly summary
@@ -343,6 +416,9 @@ cmd_upload() {
     echo "  full:  $url" >&2
     if [[ -n "$short_url" ]]; then
         echo "  short: $short_url  (expires in 7 days)" >&2
+    fi
+    if [[ "$protected" == "true" ]]; then
+        echo "  🔒 password protected — raw JSON: curl -u :PASSWORD $url/raw" >&2
     fi
 
     # stdout: short URL if present (more useful to copy), else full URL
@@ -355,28 +431,22 @@ cmd_upload() {
 
 # ---------- shares (list server-side shared sessions) ----------
 cmd_shares() {
-    [[ -n "${SHARE_URL:-}"   ]] || die "SHARE_URL not configured"
-    [[ -n "${SHARE_TOKEN:-}" ]] || die "SHARE_TOKEN not configured"
+    need_server
 
     local limit=0 search=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -s|--search) search="$2"; shift 2 ;;
-            -n|--limit)  limit="$2";  shift 2 ;;
+            -s|--search) search="${2:-}"; shift 2 ;;
+            -n|--limit)  limit="${2:-}";  shift 2 ;;
             *) die "unknown option to shares: $1" ;;
         esac
     done
+    is_uint "$limit" || die "-n expects a number"
 
-    local resp_file; resp_file=$(mktemp)
-    # shellcheck disable=SC2064
-    trap "rm -f '$resp_file'" RETURN
+    tmp_file; local resp_file="$TMP_RESULT"
 
     local http_code
-    http_code=$(curl -sS \
-        -H "Authorization: Bearer $SHARE_TOKEN" \
-        -o "$resp_file" \
-        -w '%{http_code}' \
-        "${SHARE_URL%/}/api/sessions") || die "request failed (curl error)"
+    http_code=$(api_call "$resp_file" "${SHARE_URL%/}/api/sessions") || die "request failed (curl error)"
 
     if [[ "$http_code" != "200" ]]; then
         echo "server returned HTTP $http_code:" >&2
@@ -387,9 +457,9 @@ cmd_shares() {
     local jq_filter
     if [[ -n "$search" ]]; then
         jq_filter='[ .[] | select(.title | ascii_downcase | contains($s | ascii_downcase)) ] |
-            .[] | [ (.updated_at | strftime("%Y-%m-%d %H:%M")), .slug, .url, (.short_url // ""), .title ] | @tsv'
+            .[] | [ (.updated_at | strftime("%Y-%m-%d %H:%M")), .slug, .url, (.short_url // ""), (if .protected then "🔒" else "" end), .title ] | join("\u001f")'
     else
-        jq_filter='.[] | [ (.updated_at | strftime("%Y-%m-%d %H:%M")), .slug, .url, (.short_url // ""), .title ] | @tsv'
+        jq_filter='.[] | [ (.updated_at | strftime("%Y-%m-%d %H:%M")), .slug, .url, (.short_url // ""), (if .protected then "🔒" else "" end), .title ] | join("\u001f")'
     fi
 
     local result
@@ -404,8 +474,10 @@ cmd_shares() {
         result=$(echo "$result" | head -n "$limit")
     fi
 
-    while IFS=$'\t' read -r updated slug url short_url title; do
-        printf "%s  %s  %s\n" "$updated" "$slug" "$title"
+    # Fields are separated by the ASCII unit separator: unlike tabs it is not
+    # IFS whitespace, so empty fields (no short URL, no lock) are preserved.
+    while IFS=$'\x1f' read -r updated slug url short_url lock title; do
+        printf "%s  %s  %s%s\n" "$updated" "$slug" "${lock:+$lock }" "$title"
         printf "    %s\n" "$url"
         if [[ -n "$short_url" ]]; then
             printf "    %s\n" "$short_url"
@@ -415,20 +487,13 @@ cmd_shares() {
 
 # ---------- purge (delete all shared sessions) ----------
 cmd_purge() {
-    [[ -n "${SHARE_URL:-}"   ]] || die "SHARE_URL not configured"
-    [[ -n "${SHARE_TOKEN:-}" ]] || die "SHARE_TOKEN not configured"
+    need_server
 
     # Count first
-    local resp_file; resp_file=$(mktemp)
-    # shellcheck disable=SC2064
-    trap "rm -f '$resp_file'" RETURN
+    tmp_file; local resp_file="$TMP_RESULT"
 
     local http_code
-    http_code=$(curl -sS \
-        -H "Authorization: Bearer $SHARE_TOKEN" \
-        -o "$resp_file" \
-        -w '%{http_code}' \
-        "${SHARE_URL%/}/api/sessions") || die "request failed (curl error)"
+    http_code=$(api_call "$resp_file" "${SHARE_URL%/}/api/sessions") || die "request failed (curl error)"
 
     [[ "$http_code" == "200" ]] || { cat "$resp_file" >&2; die "purge failed (HTTP $http_code)"; }
 
@@ -444,11 +509,7 @@ cmd_purge() {
     local confirm; read -r confirm
     [[ "$confirm" == "YES" ]] || { echo "Aborted."; exit 0; }
 
-    http_code=$(curl -sS -X DELETE \
-        -H "Authorization: Bearer $SHARE_TOKEN" \
-        -o "$resp_file" \
-        -w '%{http_code}' \
-        "${SHARE_URL%/}/api/sessions") || die "purge failed (curl error)"
+    http_code=$(api_call "$resp_file" -X DELETE "${SHARE_URL%/}/api/sessions") || die "purge failed (curl error)"
 
     case "$http_code" in
         200) echo "✓ deleted $(jq '.deleted' < "$resp_file") session(s)" ;;
@@ -461,10 +522,12 @@ cmd_purge() {
 cmd_delete() {
     local slug="${1:-}"
     [[ -n "$slug" ]] || die "usage: delete <slug|url>"
-    [[ -n "${SHARE_URL:-}"   ]] || die "SHARE_URL not configured"
-    [[ -n "${SHARE_TOKEN:-}" ]] || die "SHARE_TOKEN not configured"
+    need_server
 
     if [[ "$slug" == http* ]]; then
+        slug="${slug%%\?*}"      # drop ?page=N
+        slug="${slug%/}"
+        slug="${slug%/raw}"      # accept the raw-JSON URL too
         slug="${slug##*/}"
     fi
 
@@ -474,11 +537,7 @@ cmd_delete() {
     fi
 
     local http_code
-    http_code=$(curl -sS -X DELETE \
-        -H "Authorization: Bearer $SHARE_TOKEN" \
-        -o /dev/null \
-        -w '%{http_code}' \
-        "${SHARE_URL%/}/api/share/$slug") || die "delete failed (curl error)"
+    http_code=$(api_call /dev/null -X DELETE "${SHARE_URL%/}/api/share/$slug") || die "delete failed (curl error)"
 
     case "$http_code" in
         204|200) echo "✓ deleted: $slug" ;;

@@ -1,4 +1,4 @@
-# opencode-share
+# opencode-export
 
 Export and share [OpenCode](https://opencode.ai) sessions — because the official export is incomplete and sharing requires a paid plan.
 
@@ -18,10 +18,12 @@ This project has two parts:
 ## Features
 
 - Full session export — including tool calls, reasoning blocks, compaction points, and token/cost metadata
-- Clean HTML rendering with syntax highlighting and dark mode support
+- Clean HTML rendering with syntax highlighting; dark mode follows the system, with a manual light/dark toggle on every page (remembered per browser)
 - Paginated session view for long conversations
 - **Raw JSON endpoint** — append `/raw` to any share URL (e.g. `https://share.example.com/s/AbCdEf/raw`) to get machine-readable output, ideal for feeding sessions to AI assistants
-- Bearer-token authentication for upload/delete operations
+- **Password-protected shares** — `upload -p` asks for a password; viewers unlock the page in the browser, and the raw endpoint accepts HTTP Basic auth (`curl -u :PASSWORD`) so AI tools can still read it
+- Bearer-token authentication for upload/delete operations; brute-force throttling on password and login attempts
+- Hardened HTML output: strict Content-Security-Policy, Subresource Integrity on CDN assets, `noindex`, no inline handlers
 - Optional [YOURLS](https://yourls.org) integration for short links with automatic expiry
 - `opencode-export` CLI: list, show (Markdown), upload, list shared, delete, purge
 
@@ -45,8 +47,8 @@ This project has two parts:
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/opencode-share.git
-cd opencode-share/server/app
+git clone https://github.com/rcwalter24/opencode-export.git
+cd opencode-export/server/app
 cp config.example.php config.php
 ```
 
@@ -54,9 +56,18 @@ Edit `config.php`:
 
 ```php
 return [
-    'SHARE_TOKEN'   => 'your-strong-random-token',   // openssl rand -hex 32
+    'SHARE_TOKEN'     => 'your-strong-random-token',   // openssl rand -hex 32 — at least 32 chars
     'PUBLIC_BASE_URL' => 'https://share.example.com',
-    'DB_PATH'       => __DIR__ . '/data/share.db',
+    'DB_PATH'         => __DIR__ . '/data/share.db',
+
+    // Password-protected shares (defaults shown)
+    'PASSWORD_COOKIE_TTL'     => 12 * 3600, // how long an unlocked page stays unlocked
+    'PASSWORD_MAX_ATTEMPTS'   => 10,        // failed attempts per IP + share ...
+    'PASSWORD_ATTEMPT_WINDOW' => 15 * 60,   // ... within this many seconds
+
+    // Behind a reverse proxy / CDN? Rate limiting must see the real client IP.
+    'TRUSTED_PROXIES'  => [],   // IPs, CIDRs, or 'cloudflare' (its published ranges)
+    'CLIENT_IP_HEADER' => '',   // e.g. 'CF-Connecting-IP' behind Cloudflare
 
     // YOURLS (optional — leave empty to disable short links)
     'YOURLS_API_URL'         => '',
@@ -65,11 +76,18 @@ return [
 ];
 ```
 
+Behind Cloudflare use `'TRUSTED_PROXIES' => ['cloudflare'], 'CLIENT_IP_HEADER' => 'CF-Connecting-IP'`; otherwise list your proxy's address (e.g. `['127.0.0.1']`) and the last untrusted hop of `X-Forwarded-For` is used. Without this every visitor shares one rate-limit bucket.
+
+The server refuses to start while `SHARE_TOKEN` is the placeholder or shorter than 32 characters. The token authenticates the API **and** signs the admin/unlock cookies, so rotating it logs everyone out.
+
 ### 2. Set permissions
 
 ```bash
 chmod 750 server/app/data
+chmod 640 server/app/config.php
 ```
+
+Only `server/public/` may be exposed by the web server; `config.php` and the database live outside it.
 
 ### 3. Nginx configuration
 
@@ -80,8 +98,10 @@ server {
     listen 443 ssl;
     server_name share.example.com;
 
-    root /path/to/opencode-share/server/public;
+    root /path/to/opencode-export/server/public;
     index index.php;
+
+    client_max_body_size 40m;   # uploads are capped at 32 MB by the app
 
     location / {
         try_files $uri $uri/ /index.php$is_args$args;
@@ -98,15 +118,18 @@ server {
 ### 4. Apache configuration
 
 ```apache
-<VirtualHost *:80>
-    DocumentRoot /path/to/opencode-share/server/public
+<VirtualHost *:443>
+    DocumentRoot /path/to/opencode-export/server/public
     DirectoryIndex index.php
 
-    <Directory /path/to/opencode-share/server/public>
+    <Directory /path/to/opencode-export/server/public>
         AllowOverride All
         Options -Indexes
         Require all granted
     </Directory>
+
+    # Apache strips the Authorization header from PHP (CGI/FPM) unless told otherwise
+    CGIPassAuth On
 
     # Rewrite everything through index.php
     RewriteEngine On
@@ -114,6 +137,8 @@ server {
     RewriteRule ^ index.php [QSA,L]
 </VirtualHost>
 ```
+
+In `php.ini` make sure `post_max_size` is at least `40M` so 32 MB uploads are not truncated.
 
 ---
 
@@ -136,7 +161,11 @@ SHARE_URL=https://share.example.com
 SHARE_TOKEN=your-strong-random-token
 ```
 
-The token must match `SHARE_TOKEN` in the server's `config.php`.
+The token must match `SHARE_TOKEN` in the server's `config.php`. Keep the file private — the CLI warns if it is readable by other users:
+
+```bash
+chmod 600 ~/.config/opencode-export/config
+```
 
 ---
 
@@ -163,6 +192,21 @@ opencode-export upload <session_id>
 # Prints the share URL to stdout
 ```
 
+### Upload with a password
+
+```bash
+opencode-export upload <session_id> -p          # prompts (twice) for a password
+echo "$PW" | opencode-export upload <session_id> --password-stdin   # for scripts
+```
+
+Viewers opening the link get a password prompt; once unlocked, the page stays unlocked in that browser for `PASSWORD_COOKIE_TTL` (12 h by default). The raw JSON endpoint takes the password via HTTP Basic auth, so AI assistants and scripts still work:
+
+```bash
+curl -u :PASSWORD https://share.example.com/s/AbCdEf/raw
+```
+
+Re-uploading the same session **without** a password flag keeps the existing protection; `-p` replaces the password and `--clear-password` makes the page public again. Changing or clearing the password invalidates every browser that had unlocked it. Passwords are stored as bcrypt hashes and never written into the payload. Wrong guesses are throttled per IP (10 per 15 minutes by default).
+
 ### Manage shared sessions
 
 ```bash
@@ -186,7 +230,11 @@ Every shared session has a raw JSON endpoint. Just append `/raw` to the share UR
 https://share.example.com/s/AbCdEf/raw
 ```
 
-This endpoint is public (no token required) and returns the full session payload as JSON — paste the URL into your AI assistant or `curl` it directly.
+For public shares this endpoint needs no token and returns the full session payload as JSON — paste the URL into your AI assistant or `curl` it directly. For password-protected shares pass the password with HTTP Basic auth (`curl -u :PASSWORD …/raw`); the owner's Bearer token works too.
+
+### Admin page
+
+Open `https://share.example.com/` and sign in with `SHARE_TOKEN`. The session is a signed, HttpOnly cookie valid for 12 hours; the token itself is never placed in a URL. Old `/?token=…` bookmarks still work — they are exchanged for the cookie and redirected, but prefer the login form so the token stays out of browser history and server logs.
 
 ---
 
@@ -202,13 +250,25 @@ Leave both fields empty to disable this feature entirely — sessions are still 
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/api/upload` | Bearer | Upload a session (JSON body) |
-| `GET` | `/api/sessions` | Bearer | List all shared sessions |
+| `POST` | `/api/upload` | Bearer | Upload a session (JSON body). Optional `"password"` field: string sets/replaces, `null` clears, absent keeps. Response includes `protected` |
+| `GET` | `/api/sessions` | Bearer | List all shared sessions (each with a `protected` flag) |
 | `DELETE` | `/api/sessions` | Bearer | Delete all shared sessions |
-| `DELETE` | `/api/share/:slug` | Bearer | Delete one session by slug |
-| `GET` | `/s/:slug` | Public | View session as HTML |
-| `GET` | `/s/:slug/raw` | Public | Get raw JSON payload |
-| `GET` | `/` | Token (`?token=`) | Admin list page |
+| `DELETE` | `/api/share/:slug` | Bearer or admin cookie | Delete one session by slug |
+| `GET` | `/s/:slug` | Public / password | View session as HTML (shows an unlock form when protected) |
+| `POST` | `/s/:slug/unlock` | — | Submit the password; sets an unlock cookie scoped to `/s/:slug` |
+| `GET` | `/s/:slug/raw` | Public / Basic / Bearer | Raw JSON payload. Protected shares accept `Authorization: Basic` (any user, the share password) or the Bearer token |
+| `GET` | `/` | Admin cookie | Admin list page (login form when signed out) |
+| `POST` | `/login`, `/logout` | — | Admin sign in (form field `token`) / sign out |
+
+Error responses are JSON `{"error": "..."}`. Uploads are validated (`session_id` string, `messages[]` objects, `parts[]` objects) and rejected with `400` otherwise; `413` for payloads over the size limit; `429` with `Retry-After` when password or login attempts are throttled.
+
+## Security notes
+
+- `SHARE_TOKEN` guards uploads, deletions and the admin page. Generate it with `openssl rand -hex 32` and keep `config.php` unreadable by other users.
+- Share URLs are unlisted (8 random alphanumeric characters) but not secret; use `-p` for anything sensitive.
+- The stored payload is exactly what the client sent minus the `password` field. Sessions can contain file contents, environment details and tool output — review with `opencode-export show <id>` before uploading.
+- HTML is rendered with Parsedown in safe mode plus escaping of every other field; the page ships with a nonce-based CSP, SRI on the highlight.js CDN assets, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and `noindex`.
+- Unlock and admin cookies are HMAC-signed with a key derived from `SHARE_TOKEN`, `HttpOnly`, `SameSite` and `Secure` on HTTPS. There is no server-side session store.
 
 ---
 

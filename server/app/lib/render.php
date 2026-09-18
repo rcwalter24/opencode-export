@@ -3,13 +3,22 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/Parsedown.php';
 
-function render_session(array $row, int $page = 1): string {
-    $payload   = json_decode($row['payload'], true);
-    $pd        = new Parsedown();
+function h(mixed $v): string {
+    return htmlspecialchars((string)$v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+}
+
+function render_session(array $cfg, array $row, int $page = 1): string {
+    $payload = json_decode($row['payload'], true);
+    if (!is_array($payload)) {
+        $payload = [];
+    }
+    $pd = new Parsedown();
     $pd->setSafeMode(true);
+    $nonce = security_nonce();
+    $base  = rtrim((string)$cfg['PUBLIC_BASE_URL'], '/');
 
     $per_page   = 20;
-    $all_msgs   = $payload['messages'] ?? [];
+    $all_msgs   = is_array($payload['messages'] ?? null) ? $payload['messages'] : [];
     $total_msgs = count($all_msgs);
     $pages      = max(1, (int)ceil($total_msgs / $per_page));
     $page       = max(1, min($pages, $page));
@@ -25,15 +34,15 @@ function render_session(array $row, int $page = 1): string {
 }
 
 function render_part(array $part, Parsedown $pd): string {
-    $type = $part['type'] ?? 'unknown';
+    $type = is_string($part['type'] ?? null) ? $part['type'] : 'unknown';
 
     switch ($type) {
         case 'text':
-            $text = $part['text'] ?? '';
+            $text = is_string($part['text'] ?? null) ? $part['text'] : '';
             return '<div class="part-text">' . $pd->text($text) . '</div>';
 
         case 'reasoning':
-            $text = htmlspecialchars($part['text'] ?? '', ENT_QUOTES, 'UTF-8');
+            $text = h(is_string($part['text'] ?? null) ? $part['text'] : '');
             return '<details class="part-reasoning">
                 <summary>&#x1F4AD; Reasoning</summary>
                 <div class="reasoning-body"><pre>' . $text . '</pre></div>
@@ -53,22 +62,22 @@ function render_part(array $part, Parsedown $pd): string {
             $auto = ($part['auto'] ?? false) ? 'auto' : 'manual';
             return '<div class="part-compaction">
                 <span class="compaction-icon">&#x267B;</span>
-                <span class="compaction-label">Context compacted (' . htmlspecialchars($auto, ENT_QUOTES, 'UTF-8') . ') — content before this point has been replaced with a summary</span>
+                <span class="compaction-label">Context compacted (' . $auto . ') — content before this point has been replaced with a summary</span>
             </div>';
 
         default:
-            $json = htmlspecialchars(json_encode($part, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8');
+            $json = h(json_encode($part, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR));
             return '<details class="part-unknown">
-                <summary>&#x26A0;&#xFE0F; Unknown part type: ' . htmlspecialchars($type, ENT_QUOTES, 'UTF-8') . '</summary>
+                <summary>&#x26A0;&#xFE0F; Unknown part type: ' . h($type) . '</summary>
                 <pre class="unknown-json">' . $json . '</pre>
             </details>';
     }
 }
 
 function render_tool(array $part): string {
-    $tool  = htmlspecialchars($part['tool'] ?? 'unknown', ENT_QUOTES, 'UTF-8');
-    $state = $part['state'] ?? [];
-    $status = htmlspecialchars($state['status'] ?? 'unknown', ENT_QUOTES, 'UTF-8');
+    $tool   = h(is_string($part['tool'] ?? null) ? $part['tool'] : 'unknown');
+    $state  = is_array($part['state'] ?? null) ? $part['state'] : [];
+    $status = h(is_string($state['status'] ?? null) ? $state['status'] : 'unknown');
 
     $statusClass = match ($state['status'] ?? '') {
         'completed' => 'status-ok',
@@ -80,20 +89,19 @@ function render_tool(array $part): string {
     $html .= '<div class="tool-header"><span class="tool-name">&#x1F527; ' . $tool . '</span> <span class="tool-status">' . $status . '</span></div>';
 
     if (isset($state['input'])) {
-        $inputJson = htmlspecialchars(
-            is_string($state['input']) ? $state['input'] : json_encode($state['input'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE),
-            ENT_QUOTES, 'UTF-8'
+        $inputJson = h(
+            is_string($state['input']) ? $state['input'] : json_encode($state['input'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR)
         );
         $html .= '<details class="tool-section" open><summary>Input</summary><pre class="tool-input"><code class="language-json">' . $inputJson . '</code></pre></details>';
     }
 
     if (isset($state['output']) && $state['output'] !== '') {
-        $output = htmlspecialchars((string)$state['output'], ENT_QUOTES, 'UTF-8');
+        $output = h(is_scalar($state['output']) ? $state['output'] : json_encode($state['output'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
         $html .= '<details class="tool-section" open><summary>Output</summary><pre class="tool-output"><code>' . $output . '</code></pre></details>';
     }
 
     if (isset($state['error']) && $state['error'] !== '') {
-        $error = htmlspecialchars((string)$state['error'], ENT_QUOTES, 'UTF-8');
+        $error = h(is_scalar($state['error']) ? $state['error'] : json_encode($state['error'], JSON_UNESCAPED_UNICODE));
         $html .= '<div class="tool-error"><strong>Error:</strong> ' . $error . '</div>';
     }
 
@@ -102,9 +110,9 @@ function render_tool(array $part): string {
 }
 
 function render_file_part(array $part): string {
-    $filename = htmlspecialchars($part['filename'] ?? 'file', ENT_QUOTES, 'UTF-8');
-    $mime     = htmlspecialchars($part['mime'] ?? '', ENT_QUOTES, 'UTF-8');
-    $url      = $part['url'] ?? '';
+    $filename = h(is_string($part['filename'] ?? null) ? $part['filename'] : 'file');
+    $mime     = h(is_string($part['mime'] ?? null) ? $part['mime'] : '');
+    $url      = is_string($part['url'] ?? null) ? $part['url'] : '';
 
     $html = '<div class="part-file">&#x1F4CE; <strong>' . $filename . '</strong>';
     if ($mime) {
@@ -112,9 +120,9 @@ function render_file_part(array $part): string {
     }
     if ($url) {
         if (preg_match('#^https?://#i', $url)) {
-            $html .= ' <a href="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '" target="_blank" rel="noopener noreferrer">Open</a>';
+            $html .= ' <a href="' . h($url) . '" target="_blank" rel="noopener noreferrer">Open</a>';
         } else {
-            $html .= ' <span class="file-mime">' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '</span>';
+            $html .= ' <span class="file-mime">' . h($url) . '</span>';
         }
     }
     $html .= '</div>';
@@ -122,13 +130,17 @@ function render_file_part(array $part): string {
 }
 
 function format_cost(mixed $cost): string {
-    if ($cost === null || $cost === 0 || $cost === 0.0) {
+    if (!is_numeric($cost) || (float)$cost == 0.0) {
         return '$0.00';
     }
     return '$' . number_format((float)$cost, 4);
 }
 
-function format_ts(int $ts): string {
+function format_ts(mixed $ts): string {
+    if (!is_numeric($ts)) {
+        return '-';
+    }
+    $ts = (int)$ts;
     // timestamps may be in ms (>1e12) or s
     if ($ts > 1e12) {
         $ts = intdiv($ts, 1000);

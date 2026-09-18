@@ -3,29 +3,24 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
 <title>Shared Sessions</title>
-<style>
-:root {
-  --bg:#ffffff; --bg-alt:#f6f8fa; --border:#d0d7de;
-  --text:#1f2328; --text-muted:#656d76; --accent:#0969da;
-  --shadow:0 1px 3px rgba(0,0,0,.08);
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg:#0d1117; --bg-alt:#161b22; --border:#30363d;
-    --text:#e6edf3; --text-muted:#8b949e; --accent:#58a6ff;
-    --shadow:0 1px 3px rgba(0,0,0,.4);
-  }
-}
+<?= theme_head($nonce) ?>
+<style nonce="<?= $nonce ?>">
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
        font-size: 15px; line-height: 1.6; background: var(--bg); color: var(--text); }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
-.page { max-width: 800px; margin: 0 auto; padding: 2rem 1rem 4rem; }
+.page { max-width: 800px; margin: 0 auto; padding: 3.25rem 1rem 4rem; }
 h1 { font-size: 1.4rem; font-weight: 700; margin-bottom: 1.5rem;
      padding-bottom: .75rem; border-bottom: 1px solid var(--border); }
 h1 span { font-weight: 400; font-size: 1rem; color: var(--text-muted); margin-left: .5rem; }
+.topbar { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.logout-btn { background: none; border: 1px solid var(--border); border-radius: 5px; color: var(--text-muted);
+              cursor: pointer; font-size: .8rem; padding: .2rem .6rem; }
+.logout-btn:hover { color: var(--text); background: var(--bg-alt); }
+.lock { font-size: .8rem; margin-left: .3rem; }
 .pagination { display: flex; align-items: center; justify-content: center; gap: .3rem;
               margin-top: 1.5rem; font-size: .875rem; flex-wrap: wrap; }
 .pagination a, .pagination .current, .pagination .disabled {
@@ -54,7 +49,7 @@ tr:hover td { background: var(--bg-alt); }
 .links-cell a + a { margin-left: .75rem; }
 .del-btn { background: none; border: none; color: var(--text-muted); cursor: pointer;
            font-size: .85rem; padding: 0; }
-.del-btn:hover { color: #c03030; }
+.del-btn:hover { color: var(--error); }
 @media (max-width: 600px) {
   th.hide-mobile, td.hide-mobile { display: none; }
   .title-cell { max-width: 160px; }
@@ -62,8 +57,12 @@ tr:hover td { background: var(--bg-alt); }
 </style>
 </head>
 <body>
+<?= theme_toggle() ?>
 <div class="page">
-  <h1>Shared Sessions <span><?= $total ?> total</span></h1>
+  <div class="topbar">
+    <h1>Shared Sessions <span><?= (int)$total ?> total</span></h1>
+    <form method="post" action="/logout"><button class="logout-btn" type="submit">Sign out</button></form>
+  </div>
 
   <?php if (empty($rows)): ?>
     <p class="empty">No sessions uploaded yet.</p>
@@ -79,16 +78,14 @@ tr:hover td { background: var(--bg-alt); }
     </thead>
     <tbody>
     <?php foreach ($rows as $r): ?>
-      <tr id="row-<?= htmlspecialchars($r['slug'], ENT_QUOTES, 'UTF-8') ?>">
-        <td class="title-cell"><?= htmlspecialchars($r['title'], ENT_QUOTES, 'UTF-8') ?></td>
-        <td class="slug-cell hide-mobile"><?= htmlspecialchars($r['slug'], ENT_QUOTES, 'UTF-8') ?></td>
-        <td class="date-cell hide-mobile"><?= format_ts((int)$r['updated_at']) ?></td>
+      <tr id="row-<?= h($r['slug']) ?>">
+        <td class="title-cell"><?= h($r['title']) ?><?php if (!empty($r['password_hash'])): ?><span class="lock" title="Password protected">&#x1F512;</span><?php endif; ?></td>
+        <td class="slug-cell hide-mobile"><?= h($r['slug']) ?></td>
+        <td class="date-cell hide-mobile"><?= format_ts($r['updated_at']) ?></td>
         <td class="links-cell">
-          <a href="<?= htmlspecialchars($base . '/s/' . $r['slug'], ENT_QUOTES, 'UTF-8') ?>"
+          <a href="<?= h($base . '/s/' . $r['slug']) ?>"
              target="_blank" rel="noopener noreferrer">open</a>
-          <button class="del-btn"
-                  onclick="delSession('<?= htmlspecialchars($r['slug'], ENT_QUOTES, 'UTF-8') ?>', this)"
-                  title="Delete">&#x1F5D1;</button>
+          <button class="del-btn" data-slug="<?= h($r['slug']) ?>" title="Delete">&#x1F5D1;</button>
         </td>
       </tr>
     <?php endforeach; ?>
@@ -96,8 +93,7 @@ tr:hover td { background: var(--bg-alt); }
   </table>
 
   <?php if ($pages > 1):
-    $tok     = urlencode($_GET['token'] ?? '');
-    $pageUrl = fn(int $p) => '/?token=' . $tok . '&page=' . $p;
+    $pageUrl = fn(int $p) => '/?page=' . $p;
     $pageRange = function(int $cur, int $total): array {
       if ($total <= 9) return range(1, $total);
       $left = max(2, $cur - 2);  $right = min($total - 1, $cur + 2);
@@ -137,25 +133,30 @@ tr:hover td { background: var(--bg-alt); }
   <?php endif; ?>
 </div>
 
-<script>
-var TOKEN = <?= json_encode($_GET['token'] ?? '') ?>;
-
-function delSession(slug, btn) {
-  if (!confirm('Delete "' + slug + '"?')) return;
-  btn.disabled = true;
-  fetch('/api/share/' + slug, {
-    method: 'DELETE',
-    headers: { 'Authorization': 'Bearer ' + TOKEN }
-  }).then(function(r) {
-    if (r.status === 204 || r.status === 200) {
-      var row = document.getElementById('row-' + slug);
-      if (row) row.remove();
-    } else {
-      alert('Delete failed (HTTP ' + r.status + ')');
-      btn.disabled = false;
-    }
-  }).catch(function() { alert('Network error'); btn.disabled = false; });
-}
+<script nonce="<?= $nonce ?>">
+document.querySelectorAll('.del-btn').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var slug = btn.getAttribute('data-slug');
+    if (!confirm('Delete "' + slug + '"?')) return;
+    btn.disabled = true;
+    fetch('/api/share/' + encodeURIComponent(slug), {
+      method: 'DELETE',
+      credentials: 'same-origin',
+      headers: { 'X-Requested-With': 'opencode-share' }
+    }).then(function (r) {
+      if (r.status === 204 || r.status === 200) {
+        var row = document.getElementById('row-' + slug);
+        if (row) row.remove();
+      } else if (r.status === 401) {
+        alert('Session expired — please sign in again.');
+        location.reload();
+      } else {
+        alert('Delete failed (HTTP ' + r.status + ')');
+        btn.disabled = false;
+      }
+    }).catch(function () { alert('Network error'); btn.disabled = false; });
+  });
+});
 </script>
 </body>
 </html>

@@ -3,62 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title><?= htmlspecialchars($payload['title'] ?? 'OpenCode Session', ENT_QUOTES, 'UTF-8') ?></title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" media="(prefers-color-scheme: light)">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" media="(prefers-color-scheme: dark)">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" defer></script>
-<script>document.addEventListener('DOMContentLoaded', () => hljs.highlightAll());</script>
-<style>
-/* ---- CSS custom properties ---- */
-:root {
-  --bg:          #ffffff;
-  --bg-alt:      #f6f8fa;
-  --bg-card:     #ffffff;
-  --border:      #d0d7de;
-  --text:        #1f2328;
-  --text-muted:  #656d76;
-  --accent:      #0969da;
-  --user-bg:     #f0f6ff;
-  --user-border: #b6d4f5;
-  --ai-bg:       #f6f8fa;
-  --ai-border:   #d0d7de;
-  --tool-bg:     #fff8e1;
-  --tool-border: #f0c040;
-  --tool-err-bg:    #fff0f0;
-  --tool-err-border:#e06060;
-  --reason-bg:   #f0f0ff;
-  --reason-border:#c0c0e0;
-  --compact-bg:  #fffbe6;
-  --compact-border:#e6d000;
-  --code-bg:     #f6f8fa;
-  --shadow:      0 1px 3px rgba(0,0,0,.08);
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg:          #0d1117;
-    --bg-alt:      #161b22;
-    --bg-card:     #161b22;
-    --border:      #30363d;
-    --text:        #e6edf3;
-    --text-muted:  #8b949e;
-    --accent:      #58a6ff;
-    --user-bg:     #1a2332;
-    --user-border: #2a4370;
-    --ai-bg:       #161b22;
-    --ai-border:   #30363d;
-    --tool-bg:     #1e1a10;
-    --tool-border: #8a6a00;
-    --tool-err-bg:    #1e1010;
-    --tool-err-border:#a04040;
-    --reason-bg:   #12122a;
-    --reason-border:#3a3a70;
-    --compact-bg:  #1a1800;
-    --compact-border:#807000;
-    --code-bg:     #1e2430;
-    --shadow:      0 1px 3px rgba(0,0,0,.4);
-  }
-}
-
+<meta name="robots" content="noindex, nofollow">
+<title><?= h($payload['title'] ?? 'OpenCode Session') ?></title>
+<link id="hljs-light" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css"
+      integrity="sha384-eFTL69TLRZTkNfYZOLM+G04821K1qZao/4QLJbet1pP4tcF+fdXq/9CdqAbWRl/L" crossorigin="anonymous"
+      media="(prefers-color-scheme: light)">
+<link id="hljs-dark" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css"
+      integrity="sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH" crossorigin="anonymous"
+      media="(prefers-color-scheme: dark)">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"
+        integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp" crossorigin="anonymous" defer></script>
+<?= theme_head($nonce) ?>
+<style nonce="<?= $nonce ?>">
 /* ---- Reset & base ---- */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { scroll-behavior: smooth; }
@@ -78,7 +34,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
 .page-wrapper {
   max-width: 800px;
   margin: 0 auto;
-  padding: 1.5rem 1rem 4rem;
+  padding: 3.25rem 1rem 4rem;
 }
 
 /* ---- Meta card ---- */
@@ -139,6 +95,11 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
             border: 1px solid var(--border); border-radius: 4px; padding: .1rem .45rem; }
 .raw-link:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
 .raw-hint { font-size: .78rem; color: var(--text-muted); }
+.lock-badge {
+  display: inline-block; margin-left: .5rem; vertical-align: middle;
+  background: var(--bg-alt); border: 1px solid var(--border); color: var(--text-muted);
+  padding: .1rem .5rem; border-radius: 999px; font-size: .72rem; font-weight: 600;
+}
 
 /* ---- Messages ---- */
 .messages { display: flex; flex-direction: column; gap: 1.5rem; }
@@ -240,12 +201,8 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
   color: var(--text-muted);
   border: 1px solid var(--border);
 }
-.status-ok    .tool-status { background: #d4f0d4; color: #1a6a1a; border-color: #80cc80; }
-.status-error .tool-status { background: #f0d4d4; color: #6a1a1a; border-color: #cc8080; }
-@media (prefers-color-scheme: dark) {
-  .status-ok    .tool-status { background: #0d2e0d; color: #80cc80; border-color: #2e6e2e; }
-  .status-error .tool-status { background: #2e0d0d; color: #cc8080; border-color: #6e2e2e; }
-}
+.status-ok    .tool-status { background: var(--ok-bg);  color: var(--ok-fg);  border-color: var(--ok-border); }
+.status-error .tool-status { background: var(--err-bg); color: var(--err-fg); border-color: var(--err-border); }
 .tool-section { margin-top: .4rem; }
 .tool-section summary {
   cursor: pointer;
@@ -272,11 +229,8 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
   background: var(--tool-err-bg);
   border-left: 3px solid var(--tool-err-border);
   font-size: .85rem;
-  color: #c00;
+  color: var(--error);
   border-radius: 0 4px 4px 0;
-}
-@media (prefers-color-scheme: dark) {
-  .tool-error { color: #f08080; }
 }
 
 /* ---- Part: file ---- */
@@ -369,21 +323,22 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
 </style>
 </head>
 <body>
+<?= theme_toggle() ?>
 <div class="page-wrapper">
 
   <!-- Meta card -->
   <div class="meta-card">
-    <div class="meta-title"><?= htmlspecialchars($payload['title'] ?? 'Untitled Session', ENT_QUOTES, 'UTF-8') ?></div>
+    <div class="meta-title"><?= h($payload['title'] ?? 'Untitled Session') ?><?php if (!empty($row['password_hash'])): ?><span class="lock-badge" title="This session is password protected">&#x1F512; Protected</span><?php endif; ?></div>
     <div class="meta-grid">
-      <div><strong>Session ID</strong><br><?= htmlspecialchars($payload['session_id'] ?? '-', ENT_QUOTES, 'UTF-8') ?></div>
-      <div><strong>Created</strong><br><?= isset($payload['created_at']) ? format_ts((int)$payload['created_at']) : '-' ?></div>
-      <?php if (!empty($payload['model'])): ?>
-      <div><strong>Model</strong><br><?= htmlspecialchars($payload['model'], ENT_QUOTES, 'UTF-8') ?></div>
+      <div><strong>Session ID</strong><br><?= h($payload['session_id'] ?? '-') ?></div>
+      <div><strong>Created</strong><br><?= isset($payload['created_at']) ? format_ts($payload['created_at']) : '-' ?></div>
+      <?php if (!empty($payload['model']) && is_string($payload['model'])): ?>
+      <div><strong>Model</strong><br><?= h($payload['model']) ?></div>
       <?php endif; ?>
-      <?php if (!empty($payload['agent'])): ?>
-      <div><strong>Agent</strong><br><?= htmlspecialchars($payload['agent'], ENT_QUOTES, 'UTF-8') ?></div>
+      <?php if (!empty($payload['agent']) && is_string($payload['agent'])): ?>
+      <div><strong>Agent</strong><br><?= h($payload['agent']) ?></div>
       <?php endif; ?>
-      <?php $tok = $payload['tokens'] ?? null; if ($tok): ?>
+      <?php $tok = $payload['tokens'] ?? null; if (is_array($tok)): ?>
       <div><strong>Tokens</strong><br>
         in&nbsp;<?= number_format((int)($tok['input'] ?? 0)) ?>
         &nbsp;/&nbsp;out&nbsp;<?= number_format((int)($tok['output'] ?? 0)) ?>
@@ -405,17 +360,21 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
 
     <div class="raw-row">
       <a class="raw-link"
-         href="<?= htmlspecialchars(rtrim($cfg['PUBLIC_BASE_URL'], '/') . '/s/' . $row['slug'] . '/raw', ENT_QUOTES, 'UTF-8') ?>"
+         href="<?= h($base . '/s/' . $row['slug'] . '/raw') ?>"
          target="_blank" rel="noopener noreferrer">{} Raw JSON</a>
+      <?php if (!empty($row['password_hash'])): ?>
+      <span class="raw-hint">for AI / API access &mdash; <code>curl -u :PASSWORD &hellip;/raw</code></span>
+      <?php else: ?>
       <span class="raw-hint">for AI / API access</span>
+      <?php endif; ?>
     </div>
 
     <?php if (!empty($row['short_url'])): ?>
     <div class="short-url-row">
-      <span class="short-url-badge">Short link &bull; 7 days</span>
-      <a class="short-url-link" href="<?= htmlspecialchars($row['short_url'], ENT_QUOTES, 'UTF-8') ?>"
-         target="_blank" rel="noopener noreferrer"><?= htmlspecialchars($row['short_url'], ENT_QUOTES, 'UTF-8') ?></a>
-      <button class="copy-btn" onclick="copyShort(this)" data-url="<?= htmlspecialchars($row['short_url'], ENT_QUOTES, 'UTF-8') ?>">Copy</button>
+      <span class="short-url-badge">Short link &bull; <?= (int)($cfg['YOURLS_EXPIRY_DAYS'] ?? 7) ?> days</span>
+      <a class="short-url-link" href="<?= h($row['short_url']) ?>"
+         target="_blank" rel="noopener noreferrer"><?= h($row['short_url']) ?></a>
+      <button class="copy-btn" data-url="<?= h($row['short_url']) ?>">Copy</button>
     </div>
     <?php endif; ?>
   </div>
@@ -425,36 +384,36 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
     $slugUrl = fn(int $p) => '/s/' . rawurlencode($row['slug']) . ($p > 1 ? '?page=' . $p : '');
   ?>
   <div class="messages">
-    <?php foreach ($payload['messages'] ?? [] as $msg):
-      $role      = $msg['role'] ?? 'unknown';
+    <?php foreach ($payload['messages'] as $msg):
+      $role      = is_string($msg['role'] ?? null) ? $msg['role'] : 'unknown';
       $roleClass = in_array($role, ['user', 'assistant'], true) ? 'role-' . $role : 'role-unknown';
       $model     = $msg['model'] ?? null;
       $modelStr  = '';
       if (is_array($model)) {
-          $modelStr = ($model['providerID'] ?? '') . '/' . ($model['modelID'] ?? '');
+          $modelStr = (string)($model['providerID'] ?? '') . '/' . (string)($model['modelID'] ?? '');
       } elseif (is_string($model)) {
           $modelStr = $model;
       }
-      $msgTime   = isset($msg['time_created']) ? format_ts((int)$msg['time_created']) : '';
-      $msgTokens = $msg['tokens'] ?? null;
+      $msgTime   = isset($msg['time_created']) ? format_ts($msg['time_created']) : '';
+      $msgTokens = is_array($msg['tokens'] ?? null) ? $msg['tokens'] : null;
       $msgCost   = $msg['cost']   ?? null;
     ?>
     <div class="message <?= $roleClass ?>">
       <div class="msg-header">
-        <span class="role-badge"><?= htmlspecialchars($role, ENT_QUOTES, 'UTF-8') ?></span>
+        <span class="role-badge"><?= h($role) ?></span>
         <?php if ($modelStr): ?>
-        <span class="msg-model"><?= htmlspecialchars($modelStr, ENT_QUOTES, 'UTF-8') ?></span>
+        <span class="msg-model"><?= h($modelStr) ?></span>
         <?php endif; ?>
         <?php if ($msgTokens): ?>
         <span class="msg-tokens">in&nbsp;<?= (int)($msgTokens['input'] ?? 0) ?>&nbsp;/&nbsp;out&nbsp;<?= (int)($msgTokens['output'] ?? 0) ?></span>
         <?php endif; ?>
-        <?php if ($msgCost !== null && $msgCost > 0): ?>
+        <?php if (is_numeric($msgCost) && $msgCost > 0): ?>
         <span class="msg-cost"><?= format_cost($msgCost) ?></span>
         <?php endif; ?>
-        <?php if ($msgTime): ?><span class="msg-time"><?= htmlspecialchars($msgTime, ENT_QUOTES, 'UTF-8') ?></span><?php endif; ?>
+        <?php if ($msgTime): ?><span class="msg-time"><?= h($msgTime) ?></span><?php endif; ?>
       </div>
-      <?php foreach ($msg['parts'] ?? [] as $part):
-        echo render_part($part, $pd);
+      <?php foreach (is_array($msg['parts'] ?? null) ? $msg['parts'] : [] as $part):
+        if (is_array($part)) echo render_part($part, $pd);
       endforeach; ?>
     </div>
     <?php endforeach; ?>
@@ -474,7 +433,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
   ?>
   <nav class="pagination" aria-label="Page navigation">
     <?php if ($page > 1): ?>
-      <a href="<?= htmlspecialchars($slugUrl($page - 1), ENT_QUOTES, 'UTF-8') ?>">&lsaquo;</a>
+      <a href="<?= h($slugUrl($page - 1)) ?>">&lsaquo;</a>
     <?php else: ?>
       <span class="disabled">&lsaquo;</span>
     <?php endif; ?>
@@ -485,12 +444,12 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
       <?php elseif ($p === $page): ?>
         <span class="current"><?= $p ?></span>
       <?php else: ?>
-        <a href="<?= htmlspecialchars($slugUrl($p), ENT_QUOTES, 'UTF-8') ?>"><?= $p ?></a>
+        <a href="<?= h($slugUrl($p)) ?>"><?= $p ?></a>
       <?php endif; ?>
     <?php endforeach; ?>
 
     <?php if ($page < $pages): ?>
-      <a href="<?= htmlspecialchars($slugUrl($page + 1), ENT_QUOTES, 'UTF-8') ?>">&rsaquo;</a>
+      <a href="<?= h($slugUrl($page + 1)) ?>">&rsaquo;</a>
     <?php else: ?>
       <span class="disabled">&rsaquo;</span>
     <?php endif; ?>
@@ -499,25 +458,30 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
 
 </div>
 
-<script>
-function copyShort(btn) {
-  var url = btn.getAttribute('data-url');
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(url).then(function() {
-      btn.textContent = 'Copied!';
-      setTimeout(function() { btn.textContent = 'Copy'; }, 2000);
+<script nonce="<?= $nonce ?>">
+document.addEventListener('DOMContentLoaded', function () {
+  if (window.hljs) hljs.highlightAll();
+  document.querySelectorAll('.copy-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var url = btn.getAttribute('data-url');
+      var done = function () {
+        btn.textContent = 'Copied!';
+        setTimeout(function () { btn.textContent = 'Copy'; }, 2000);
+      };
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(url).then(done);
+      } else {
+        var ta = document.createElement('textarea');
+        ta.value = url;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        done();
+      }
     });
-  } else {
-    var ta = document.createElement('textarea');
-    ta.value = url;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    btn.textContent = 'Copied!';
-    setTimeout(function() { btn.textContent = 'Copy'; }, 2000);
-  }
-}
+  });
+});
 </script>
 </body>
 </html>
