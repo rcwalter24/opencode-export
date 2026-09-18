@@ -314,6 +314,50 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
   min-width: auto; padding: 0 .1rem; pointer-events: none; }
 @media print { .pagination { display: none; } }
 
+/* ---- Edit mode ---- */
+.ed-bar { position: sticky; top: 0; z-index: 40; display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+  margin: -2.25rem -1rem 1.25rem; padding: .55rem 3.5rem .55rem 1rem; background: var(--tool-bg); border-bottom: 1px solid var(--tool-border);
+  font-size: .85rem; }
+.ed-bar .ed-title { font-weight: 700; margin-right: auto; }
+.ed-bar button, .ed-bar a.btn, dialog button { padding: .35rem .7rem; font-size: .82rem; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg-card); color: var(--text); }
+.ed-bar button:hover, dialog button:hover { background: var(--bg-alt); }
+.ed-bar button.primary, .ed-bar a.btn.primary, dialog button.primary { background: var(--accent); border-color: var(--accent); color: #fff; text-decoration: none; }
+.ed-bar button:disabled, dialog button:disabled { opacity: .5; cursor: default; }
+.ed-msg { margin-left: auto; }
+.ed-msg button, .ed-part button { background: none; border: 1px solid transparent; color: var(--text-muted); cursor: pointer;
+  font-size: .78rem; padding: .1rem .4rem; border-radius: 4px; }
+.ed-msg button:hover, .ed-part button:hover { color: var(--error); border-color: var(--border); background: var(--bg-card); }
+.ed-part button.ed-edit:hover { color: var(--accent); }
+.part { position: relative; }
+.ed-part { position: absolute; top: .35rem; right: .5rem; display: flex; gap: .2rem; z-index: 2; }
+.part + .part > .part-text { margin-top: .75rem; }
+.ed-editor { margin: .5rem 0; }
+.ed-editor textarea { width: 100%; min-height: 8rem; max-height: 60vh; font-family: "SFMono-Regular", Consolas, Menlo, monospace;
+  font-size: .82rem; padding: .5rem; border: 1px solid var(--accent); border-radius: 6px; background: var(--bg); color: var(--text); }
+.ed-editor .ed-actions { display: flex; gap: .4rem; margin-top: .4rem; align-items: center; font-size: .8rem; color: var(--text-muted); }
+.ed-editor .ed-actions select { font-size: .8rem; padding: .2rem; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
+.ed-editor button { padding: .3rem .7rem; font-size: .8rem; border-radius: 5px; cursor: pointer; border: 1px solid var(--border); background: var(--bg-card); color: var(--text); }
+.ed-editor button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+dialog { margin: auto; inset: 0; background: var(--bg-card); color: var(--text); border: 1px solid var(--border);
+  border-radius: 10px; padding: 1.4rem 1.5rem 1.2rem; width: min(94vw, 560px); box-shadow: var(--shadow); }
+dialog::backdrop { background: rgba(0,0,0,.45); }
+dialog h2 { font-size: 1rem; margin: 0 0 .8rem; }
+dialog label { display: block; font-size: .78rem; font-weight: 600; color: var(--text-muted); margin: .6rem 0 .25rem; }
+dialog input[type=text] { width: 100%; font-size: .95rem; padding: .45rem .6rem; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--text); font-family: "SFMono-Regular", Consolas, Menlo, monospace; }
+dialog .check { display: flex; align-items: center; gap: .4rem; font-size: .82rem; margin-top: .6rem; color: var(--text-muted); }
+dialog .actions { display: flex; gap: .5rem; margin-top: 1rem; flex-wrap: wrap; align-items: center; }
+dialog .result { margin-top: .8rem; font-size: .82rem; }
+dialog .result .summary { font-weight: 600; margin-bottom: .3rem; }
+dialog .samples { max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-alt); }
+dialog .samples div { padding: .3rem .5rem; border-bottom: 1px solid var(--border); font-family: monospace; font-size: .75rem; white-space: pre-wrap; word-break: break-all; }
+dialog .samples div:last-child { border-bottom: none; }
+dialog .samples span { color: var(--text-muted); }
+dialog .error { color: var(--error); font-size: .82rem; margin-top: .5rem; }
+dialog .link { font-family: monospace; word-break: break-all; }
+@media print { .ed-bar, .ed-msg, .ed-part { display: none; } }
+
 /* ---- Mobile ---- */
 @media (max-width: 600px) {
   body { font-size: 14px; }
@@ -326,6 +370,15 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
 <body>
 <?= theme_toggle() ?>
 <div class="page-wrapper">
+<?php if ($edit): ?>
+  <div class="ed-bar" data-slug="<?= h($row['slug']) ?>">
+    <span class="ed-title">&#x270E; Editing</span>
+    <button type="button" id="ed-replace">Find &amp; replace</button>
+    <button type="button" id="ed-duplicate">Duplicate</button>
+    <button type="button" id="ed-undo" <?= $history > 0 ? '' : 'disabled' ?>>Undo (<span id="ed-undo-n"><?= (int)$history ?></span>)</button>
+    <a class="btn primary" href="<?= h('/s/' . $row['slug'] . ($page > 1 ? '?page=' . $page : '')) ?>">Done</a>
+  </div>
+<?php endif; ?>
 
   <!-- Meta card -->
   <div class="meta-card">
@@ -382,10 +435,16 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
 
   <!-- Messages -->
   <?php
-    $slugUrl = fn(int $p) => '/s/' . rawurlencode($row['slug']) . ($p > 1 ? '?page=' . $p : '');
+    $slugUrl = function (int $p) use ($row, $edit): string {
+      $q = [];
+      if ($p > 1) $q[] = 'page=' . $p;
+      if ($edit)  $q[] = 'edit=1';
+      return '/s/' . rawurlencode($row['slug']) . ($q ? '?' . implode('&', $q) : '');
+    };
   ?>
   <div class="messages">
-    <?php foreach ($payload['messages'] as $msg):
+    <?php foreach ($payload['messages'] as $k => $msg):
+      $mi        = $offset + $k;
       $role      = is_string($msg['role'] ?? null) ? $msg['role'] : 'unknown';
       $roleClass = in_array($role, ['user', 'assistant'], true) ? 'role-' . $role : 'role-unknown';
       $modelStr  = format_model($msg['model'] ?? null);
@@ -393,7 +452,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
       $msgTokens = is_array($msg['tokens'] ?? null) ? $msg['tokens'] : null;
       $msgCost   = $msg['cost']   ?? null;
     ?>
-    <div class="message <?= $roleClass ?>">
+    <div class="message <?= $roleClass ?>" data-mi="<?= $mi ?>">
       <div class="msg-header">
         <span class="role-badge"><?= h($role) ?></span>
         <?php if ($modelStr): ?>
@@ -406,10 +465,29 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
         <span class="msg-cost"><?= format_cost($msgCost) ?></span>
         <?php endif; ?>
         <?php if ($msgTime): ?><span class="msg-time"><?= h($msgTime) ?></span><?php endif; ?>
+        <?php if ($edit): ?><span class="ed-msg"><button type="button" class="ed-del-msg" title="Delete this message">&#x2715; message</button></span><?php endif; ?>
       </div>
-      <?php foreach (is_array($msg['parts'] ?? null) ? $msg['parts'] : [] as $part):
-        if (is_array($part)) echo render_part($part, $pd);
-      endforeach; ?>
+      <?php foreach (is_array($msg['parts'] ?? null) ? $msg['parts'] : [] as $j => $part):
+        if (!is_array($part)) continue;
+        $html = render_part($part, $pd);
+        if ($html === '') continue;
+        $ptype = is_string($part['type'] ?? null) ? $part['type'] : '';
+        $fields = match ($ptype) {
+          'text', 'reasoning' => ['text'],
+          'tool' => array_values(array_filter(['input', 'output', 'error'], fn($f) => isset($part['state'][$f]) && $part['state'][$f] !== '')),
+          default => [],
+        };
+      ?>
+      <div class="part" data-pi="<?= (int)$j ?>" data-fields="<?= h(implode(',', $fields)) ?>">
+        <?php if ($edit): ?>
+        <span class="ed-part">
+          <?php if ($fields): ?><button type="button" class="ed-edit" title="Edit text">&#x270E;</button><?php endif; ?>
+          <button type="button" class="ed-del-part" title="Delete this part">&#x2715;</button>
+        </span>
+        <?php endif; ?>
+        <?= $html ?>
+      </div>
+      <?php endforeach; ?>
     </div>
     <?php endforeach; ?>
   </div>
@@ -453,6 +531,135 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
 
 </div>
 
+<?php if ($edit): ?>
+<dialog id="rp-dialog">
+  <form id="rp-form" autocomplete="off">
+    <h2>Find &amp; replace across the whole session</h2>
+    <label for="rp-find">Find (exact text, min. 2 characters)</label>
+    <input type="text" id="rp-find" required minlength="2">
+    <label for="rp-replace">Replace with</label>
+    <input type="text" id="rp-replace" value="[REDACTED]">
+    <label class="check"><input type="checkbox" id="rp-ci"> Ignore case</label>
+    <div class="result" id="rp-result" hidden>
+      <div class="summary" id="rp-summary"></div>
+      <div class="samples" id="rp-samples"></div>
+    </div>
+    <div class="error" id="rp-error" hidden></div>
+    <div class="actions">
+      <button type="submit" class="primary" id="rp-preview">Preview</button>
+      <button type="button" id="rp-apply" disabled>Replace all</button>
+      <button type="button" id="rp-cancel">Close</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="dup-dialog">
+  <h2>Copy created</h2>
+  <p>The copy has a new link and keeps the same password setting. Edit the copy and leave the original untouched:</p>
+  <p class="link" id="dup-url"></p>
+  <div class="actions">
+    <button type="button" class="primary" id="dup-open">Open copy in edit mode</button>
+    <button type="button" id="dup-close">Close</button>
+  </div>
+</dialog>
+<script nonce="<?= $nonce ?>">
+(function () {
+  var slug = document.querySelector('.ed-bar').dataset.slug;
+  function api(action, body) {
+    return fetch('/api/share/' + encodeURIComponent(slug) + '/' + action, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'X-Requested-With': 'opencode-share', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    }).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; }); });
+  }
+  function fail(e) { alert(e.message || 'Request failed'); }
+
+  // ---- find & replace
+  var rp = document.getElementById('rp-dialog'), rpForm = document.getElementById('rp-form');
+  var rpFind = document.getElementById('rp-find'), rpRepl = document.getElementById('rp-replace'), rpCi = document.getElementById('rp-ci');
+  var rpResult = document.getElementById('rp-result'), rpSummary = document.getElementById('rp-summary'), rpSamples = document.getElementById('rp-samples');
+  var rpApply = document.getElementById('rp-apply'), rpErr = document.getElementById('rp-error');
+  function rpBody(preview) { return { find: rpFind.value, replace: rpRepl.value, ignore_case: rpCi.checked, preview: preview }; }
+  function rpReset() { rpResult.hidden = true; rpApply.disabled = true; rpErr.hidden = true; }
+  [rpFind, rpRepl, rpCi].forEach(function (el) { el.addEventListener('input', rpReset); });
+  document.getElementById('ed-replace').addEventListener('click', function () { rpReset(); rp.showModal(); rpFind.focus(); });
+  document.getElementById('rp-cancel').addEventListener('click', function () { rp.close(); });
+  rpForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    api('replace', rpBody(true)).then(function (r) {
+      rpSummary.textContent = r.matches === 0 ? 'No matches.' : r.matches + ' match' + (r.matches === 1 ? '' : 'es') + ' in ' + r.messages + ' message' + (r.messages === 1 ? '' : 's');
+      rpSamples.innerHTML = '';
+      (r.samples || []).forEach(function (s) {
+        var d = document.createElement('div'), p = document.createElement('span');
+        p.textContent = s.path + ': '; d.appendChild(p); d.appendChild(document.createTextNode(s.context)); rpSamples.appendChild(d);
+      });
+      rpResult.hidden = false; rpApply.disabled = r.matches === 0;
+    }).catch(function (e) { rpErr.textContent = e.message; rpErr.hidden = false; });
+  });
+  rpApply.addEventListener('click', function () {
+    rpApply.disabled = true;
+    api('replace', rpBody(false)).then(function () { location.reload(); }).catch(function (e) { rpErr.textContent = e.message; rpErr.hidden = false; });
+  });
+
+  // ---- duplicate / undo
+  var dup = document.getElementById('dup-dialog'), dupUrl = '';
+  document.getElementById('ed-duplicate').addEventListener('click', function () {
+    api('duplicate').then(function (r) {
+      dupUrl = r.url; document.getElementById('dup-url').textContent = r.url; dup.showModal();
+    }).catch(fail);
+  });
+  document.getElementById('dup-open').addEventListener('click', function () { location.href = dupUrl + '?edit=1'; });
+  document.getElementById('dup-close').addEventListener('click', function () { dup.close(); });
+  document.getElementById('ed-undo').addEventListener('click', function () {
+    if (!confirm('Undo the last edit?')) return;
+    api('undo').then(function () { location.reload(); }).catch(fail);
+  });
+
+  // ---- per message / per part
+  document.querySelectorAll('.ed-del-msg').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var mi = +btn.closest('.message').dataset.mi;
+      if (!confirm('Delete message #' + (mi + 1) + '? (can be undone)')) return;
+      api('delete-message', { message: mi }).then(function () { location.reload(); }).catch(fail);
+    });
+  });
+  document.querySelectorAll('.ed-del-part').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var part = btn.closest('.part'), mi = +part.closest('.message').dataset.mi, pi = +part.dataset.pi;
+      if (!confirm('Delete this part? (can be undone)')) return;
+      api('delete-part', { message: mi, part: pi }).then(function () { location.reload(); }).catch(fail);
+    });
+  });
+  document.querySelectorAll('.ed-edit').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var part = btn.closest('.part'), mi = +part.closest('.message').dataset.mi, pi = +part.dataset.pi;
+      var fields = part.dataset.fields.split(',').filter(Boolean);
+      if (part.querySelector('.ed-editor')) return;
+      api('get-part', { message: mi, part: pi }).then(function (p) {
+        var box = document.createElement('div'); box.className = 'ed-editor';
+        var ta = document.createElement('textarea');
+        var sel = document.createElement('select');
+        fields.forEach(function (f) { var o = document.createElement('option'); o.value = f; o.textContent = f; sel.appendChild(o); });
+        var load = function () { ta.value = p[sel.value] == null ? '' : p[sel.value]; };
+        sel.addEventListener('change', load); load();
+        var save = document.createElement('button'); save.type = 'button'; save.className = 'primary'; save.textContent = 'Save';
+        var cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Cancel';
+        var act = document.createElement('div'); act.className = 'ed-actions';
+        if (fields.length > 1) { act.appendChild(document.createTextNode('Field: ')); act.appendChild(sel); }
+        act.appendChild(save); act.appendChild(cancel);
+        box.appendChild(ta); box.appendChild(act);
+        part.insertBefore(box, part.children[1] || null);
+        ta.focus();
+        cancel.addEventListener('click', function () { box.remove(); });
+        save.addEventListener('click', function () {
+          save.disabled = true;
+          api('set-part', { message: mi, part: pi, field: sel.value, text: ta.value }).then(function () { location.reload(); }).catch(function (e) { save.disabled = false; fail(e); });
+        });
+      }).catch(fail);
+    });
+  });
+})();
+</script>
+<?php endif; ?>
 <script nonce="<?= $nonce ?>">
 document.addEventListener('DOMContentLoaded', function () {
   if (window.hljs) hljs.highlightAll();

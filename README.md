@@ -227,6 +227,17 @@ opencode-export purge               # delete ALL shared sessions
 OPENCODE_DB=/custom/path/opencode.db opencode-export list
 ```
 
+### Redact a shared session (admin page)
+
+Sessions often contain things you did not mean to publish — API keys in tool output, internal hostnames, a customer's name. Sign in to the admin page and click **edit** on a share (or open `…/s/<slug>?edit=1`) to get an editing toolbar on the rendered page:
+
+- **Find & replace** — exact text (optionally ignoring case) across every message, tool input/output and reasoning block. *Preview* shows the match count and context snippets before anything changes.
+- **✕** on a message or on a single part removes it; **✎** on a text, reasoning or tool part opens it in a textarea.
+- **Duplicate** creates a copy under a new link (same password setting) so you can redact the copy and keep the original private.
+- **Undo** reverts the last edit; the five most recent states are kept per share.
+
+Edits change the stored payload, so the page, the raw JSON endpoint and any existing short link all serve the redacted version. Nothing is sent to any third-party service.
+
 ### Read a session with an AI assistant
 
 Every shared session has a raw JSON endpoint. Just append `/raw` to the share URL:
@@ -260,6 +271,12 @@ Leave both fields empty to disable this feature entirely — sessions are still 
 | `DELETE` | `/api/sessions` | Bearer | Delete all shared sessions |
 | `DELETE` | `/api/share/:slug` | Bearer or admin cookie | Delete one session by slug |
 | `PUT` | `/api/share/:slug/password` | Bearer or admin cookie | Body `{"password": "..."}` sets/replaces, `{"password": null}` removes |
+| `POST` | `/api/share/:slug/replace` | Bearer or admin cookie | `{"find","replace","ignore_case","preview"}` → `{matches, messages, samples}`; without `preview` the change is applied |
+| `POST` | `/api/share/:slug/delete-message` | Bearer or admin cookie | `{"message": i}` |
+| `POST` | `/api/share/:slug/delete-part` | Bearer or admin cookie | `{"message": i, "part": j}` |
+| `POST` | `/api/share/:slug/get-part`, `/set-part` | Bearer or admin cookie | Read / write one part: `{"message", "part", "field": text\|input\|output\|error, "text"}` |
+| `POST` | `/api/share/:slug/duplicate` | Bearer or admin cookie | Copy the share under a new slug |
+| `POST` | `/api/share/:slug/undo` | Bearer or admin cookie | Restore the state before the last edit |
 | `GET` | `/s/:slug` | Public / password | View session as HTML (shows an unlock form when protected) |
 | `POST` | `/s/:slug/unlock` | — | Submit the password; sets an unlock cookie scoped to `/s/:slug` |
 | `GET` | `/s/:slug/raw` | Public / Basic / Bearer | Raw JSON payload. Protected shares accept `Authorization: Basic` (any user, the share password) or the Bearer token |

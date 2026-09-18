@@ -35,6 +35,15 @@ function db_connect(array $cfg): PDO {
             updated_at    INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_share_session ON share(session_id);
+        CREATE TABLE IF NOT EXISTS share_history (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            slug       TEXT NOT NULL,
+            title      TEXT NOT NULL,
+            payload    TEXT NOT NULL,
+            note       TEXT,
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_history_slug ON share_history(slug);
         CREATE TABLE IF NOT EXISTS rate_limit (
             key      TEXT PRIMARY KEY,
             attempts INTEGER NOT NULL,

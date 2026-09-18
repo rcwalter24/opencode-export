@@ -7,7 +7,7 @@ function h(mixed $v): string {
     return htmlspecialchars((string)$v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
-function render_session(array $cfg, array $row, int $page = 1): string {
+function render_session(array $cfg, array $row, int $page = 1, bool $edit = false, int $history = 0): string {
     $payload = json_decode($row['payload'], true);
     if (!is_array($payload)) {
         $payload = [];

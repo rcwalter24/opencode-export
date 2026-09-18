@@ -103,6 +103,7 @@ dialog .error { color: var(--error); font-size: .82rem; margin: .6rem 0 0; }
         <td class="links-cell">
           <a href="<?= h($base . '/s/' . $r['slug']) ?>"
              target="_blank" rel="noopener noreferrer">open</a>
+          <a href="<?= h($base . '/s/' . $r['slug'] . '?edit=1') ?>" title="Redact / edit content">edit</a>
           <button class="pw-btn" data-slug="<?= h($r['slug']) ?>" data-title="<?= h($r['title']) ?>"
                   data-protected="<?= empty($r['password_hash']) ? '0' : '1' ?>" title="Password">&#x1F511;</button>
           <button class="del-btn" data-slug="<?= h($r['slug']) ?>" title="Delete">&#x1F5D1;</button>

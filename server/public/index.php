@@ -31,6 +31,7 @@ require BASE . '/lib/auth.php';
 require BASE . '/lib/yourls.php';
 require BASE . '/lib/render.php';
 require BASE . '/lib/theme.php';
+require BASE . '/lib/edit.php';
 
 security_headers();
 
@@ -254,9 +255,100 @@ if ($method === 'DELETE' && preg_match('#^/api/share/(' . SLUG_RE . ')$#', $uri,
         yourls_expire_now($cfg, $row['short_url']);
     }
     $pdo->prepare("DELETE FROM share WHERE slug = ?")->execute([$row['slug']]);
+    $pdo->prepare("DELETE FROM share_history WHERE slug = ?")->execute([$row['slug']]);
 
     http_response_code(204);
     exit;
+}
+
+// ---- Editing (redaction) endpoints: admin cookie or Bearer ----
+if ($method === 'POST' && preg_match('#^/api/share/(' . SLUG_RE . ')/(replace|duplicate|undo|delete-message|delete-part|set-part|get-part)$#', $uri, $m)) {
+    auth_check_api_or_admin($cfg);
+
+    $pdo = db_connect($cfg);
+    $row = share_lookup($pdo, $m[1]);
+    if (!$row) {
+        json_error(404, 'not found');
+    }
+    $body = json_decode((string)file_get_contents('php://input', false, null, 0, 4 * 1024 * 1024), true);
+    if (!is_array($body)) {
+        $body = [];
+    }
+    $action = $m[2];
+
+    if ($action === 'duplicate') {
+        json(200, edit_duplicate($pdo, $cfg, $row));
+    }
+    if ($action === 'undo') {
+        $ok = edit_restore_latest($pdo, $row);
+        json($ok ? 200 : 409, ['restored' => $ok, 'history' => edit_history_count($pdo, $row['slug'])]);
+    }
+
+    $data = edit_decode($row);
+
+    if ($action === 'replace') {
+        $find    = $body['find'] ?? '';
+        $replace = $body['replace'] ?? '';
+        $ci      = (bool)($body['ignore_case'] ?? false);
+        $dry     = (bool)($body['preview'] ?? false);
+        if (!is_string($find) || $find === '' || !is_string($replace)) {
+            json_error(400, 'find must be a non-empty string');
+        }
+        if (mb_strlen($find) < 2) {
+            json_error(400, 'find must be at least 2 characters');
+        }
+        $stats = edit_replace($data, $find, $replace, $ci, $dry);
+        if (!$dry && $stats['matches'] > 0) {
+            edit_snapshot($pdo, $row, 'replace: ' . mb_substr($find, 0, 60));
+            edit_save($pdo, $row, $data);
+        }
+        $stats['applied'] = !$dry && $stats['matches'] > 0;
+        $stats['history'] = edit_history_count($pdo, $row['slug']);
+        json(200, $stats);
+    }
+
+    $i = (int)($body['message'] ?? -1);
+    $j = (int)($body['part'] ?? -1);
+
+    if ($action === 'get-part') {
+        $part = $data['messages'][$i]['parts'][$j] ?? null;
+        if (!is_array($part)) {
+            json_error(404, 'part not found');
+        }
+        $state = is_array($part['state'] ?? null) ? $part['state'] : [];
+        $input = $state['input'] ?? null;
+        json(200, [
+            'type'   => $part['type'] ?? '',
+            'text'   => is_string($part['text'] ?? null) ? $part['text'] : '',
+            'input'  => $input === null ? null : (is_string($input) ? $input : json_encode($input, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)),
+            'output' => isset($state['output']) ? (is_scalar($state['output']) ? (string)$state['output'] : json_encode($state['output'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) : null,
+            'error'  => isset($state['error']) ? (is_scalar($state['error']) ? (string)$state['error'] : json_encode($state['error'], JSON_UNESCAPED_UNICODE)) : null,
+        ]);
+    }
+
+    if ($action === 'delete-message') {
+        if (!edit_delete_message($data, $i)) {
+            json_error(404, 'message not found');
+        }
+        edit_snapshot($pdo, $row, "delete message $i");
+    } elseif ($action === 'delete-part') {
+        if (!edit_delete_part($data, $i, $j)) {
+            json_error(404, 'part not found');
+        }
+        edit_snapshot($pdo, $row, "delete part $i/$j");
+    } else { // set-part
+        $field = $body['field'] ?? 'text';
+        $text  = $body['text'] ?? null;
+        if (!is_string($field) || !is_string($text)) {
+            json_error(400, 'field and text must be strings');
+        }
+        if (($err = edit_set_part_text($data, $i, $j, $field, $text)) !== null) {
+            json_error(400, $err);
+        }
+        edit_snapshot($pdo, $row, "edit part $i/$j ($field)");
+    }
+    edit_save($pdo, $row, $data);
+    json(200, ['ok' => true, 'messages' => count($data['messages']), 'history' => edit_history_count($pdo, $row['slug'])]);
 }
 
 // ---- PUT /api/share/:slug/password  (set / replace / remove the share password) ----
@@ -372,10 +464,16 @@ if (($method === 'GET' || $method === 'HEAD') && preg_match('#^/s/(' . SLUG_RE .
         html(401, 'unlock', ['row' => $row, 'page' => $page, 'error' => null]);
     }
 
+    // Edit mode (redaction toolbar) only for a signed-in admin; never cached.
+    $edit = isset($_GET['edit']) && auth_admin_cookie_valid($cfg);
+    if ($edit) {
+        $history = edit_history_count(db_connect($cfg), $row['slug']);
+    }
+
     http_response_code(200);
     header('Content-Type: text/html; charset=UTF-8');
-    header('Cache-Control: ' . (!empty($row['password_hash']) ? 'private, no-store' : 'public, max-age=60'));
-    echo render_session($cfg, $row, $page);
+    header('Cache-Control: ' . ($edit || !empty($row['password_hash']) ? 'private, no-store' : 'public, max-age=60'));
+    echo render_session($cfg, $row, $page, $edit, $history ?? 0);
     exit;
 }
 
