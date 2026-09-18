@@ -194,12 +194,17 @@ cmd_show() {
     [[ "$exists" -gt 0 ]] || die "session not found: $sid"
 
     sq <<SQL | jq -r '.[0] |
-        "# " + .title + "\n\n"
+        (.model | if type == "string" and startswith("{") then (fromjson? // .) else . end) as $m
+        | (if ($m | type) == "object"
+             then (($m.providerID // "") + "/" + ($m.modelID // $m.id // ""))
+                  + (if $m.variant then " (" + $m.variant + ")" else "" end)
+             else $m end) as $model
+        | "# " + .title + "\n\n"
         + "- **Session ID**: `" + .id + "`\n"
         + "- **Created**: " + (.created // "") + "\n"
         + (if .directory then "- **Directory**: `" + .directory + "`\n" else "" end)
         + (if .agent     then "- **Agent**: "     + .agent     + "\n" else "" end)
-        + (if .model     then "- **Model**: "     + .model     + "\n" else "" end)
+        + (if $model     then "- **Model**: "     + $model     + "\n" else "" end)
         + "- **Tokens**: input=" + (.tokens_input|tostring)
         + ", output=" + (.tokens_output|tostring)
         + ", cost=$" + (.cost | . * 10000 | round / 10000 | tostring)
@@ -310,7 +315,8 @@ SQL
             created_at:  $session.time_created,
             directory:   $session.directory,
             agent:       $session.agent,
-            model:       $session.model,
+            model:       ($session.model
+                          | if type == "string" and startswith("{") then (fromjson? // .) else . end),
             tokens: {
                 input:     ($session.tokens_input     // 0),
                 output:    ($session.tokens_output    // 0),

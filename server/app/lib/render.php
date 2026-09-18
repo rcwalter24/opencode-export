@@ -129,6 +129,31 @@ function render_file_part(array $part): string {
     return $html;
 }
 
+/**
+ * Model may be a plain string, an object {providerID, id|modelID, variant}
+ * or (from older clients) that object serialised as a JSON string.
+ */
+function format_model(mixed $model): string {
+    if (is_string($model)) {
+        $trimmed = trim($model);
+        if ($trimmed !== '' && $trimmed[0] === '{') {
+            $decoded = json_decode($trimmed, true);
+            if (is_array($decoded)) {
+                $model = $decoded;
+            }
+        }
+    }
+    if (is_array($model)) {
+        $provider = is_string($model['providerID'] ?? null) ? $model['providerID'] : '';
+        $id       = is_string($model['modelID'] ?? null) ? $model['modelID']
+                  : (is_string($model['id'] ?? null) ? $model['id'] : '');
+        $variant  = is_string($model['variant'] ?? null) ? $model['variant'] : '';
+        $out = $provider !== '' && $id !== '' ? "$provider/$id" : ($id ?: $provider);
+        return $variant !== '' ? "$out ($variant)" : $out;
+    }
+    return is_scalar($model) ? (string)$model : '';
+}
+
 function format_cost(mixed $cost): string {
     if (!is_numeric($cost) || (float)$cost == 0.0) {
         return '$0.00';

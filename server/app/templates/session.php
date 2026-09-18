@@ -59,6 +59,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
   font-size: .85rem;
   color: var(--text-muted);
 }
+.meta-grid > div { min-width: 0; overflow-wrap: anywhere; }
 .meta-grid strong { color: var(--text); }
 .short-url-row {
   margin-top: 1rem;
@@ -332,8 +333,8 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
     <div class="meta-grid">
       <div><strong>Session ID</strong><br><?= h($payload['session_id'] ?? '-') ?></div>
       <div><strong>Created</strong><br><?= isset($payload['created_at']) ? format_ts($payload['created_at']) : '-' ?></div>
-      <?php if (!empty($payload['model']) && is_string($payload['model'])): ?>
-      <div><strong>Model</strong><br><?= h($payload['model']) ?></div>
+      <?php $modelLabel = format_model($payload['model'] ?? null); if ($modelLabel !== ''): ?>
+      <div><strong>Model</strong><br><?= h($modelLabel) ?></div>
       <?php endif; ?>
       <?php if (!empty($payload['agent']) && is_string($payload['agent'])): ?>
       <div><strong>Agent</strong><br><?= h($payload['agent']) ?></div>
@@ -387,13 +388,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
     <?php foreach ($payload['messages'] as $msg):
       $role      = is_string($msg['role'] ?? null) ? $msg['role'] : 'unknown';
       $roleClass = in_array($role, ['user', 'assistant'], true) ? 'role-' . $role : 'role-unknown';
-      $model     = $msg['model'] ?? null;
-      $modelStr  = '';
-      if (is_array($model)) {
-          $modelStr = (string)($model['providerID'] ?? '') . '/' . (string)($model['modelID'] ?? '');
-      } elseif (is_string($model)) {
-          $modelStr = $model;
-      }
+      $modelStr  = format_model($msg['model'] ?? null);
       $msgTime   = isset($msg['time_created']) ? format_ts($msg['time_created']) : '';
       $msgTokens = is_array($msg['tokens'] ?? null) ? $msg['tokens'] : null;
       $msgCost   = $msg['cost']   ?? null;

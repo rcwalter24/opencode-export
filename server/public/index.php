@@ -99,10 +99,13 @@ function payload_validate(array $data): ?string {
     if (isset($data['title']) && !is_string($data['title'])) {
         return 'title must be a string';
     }
-    foreach (['model', 'agent', 'directory'] as $k) {
+    foreach (['agent', 'directory'] as $k) {
         if (isset($data[$k]) && !is_string($data[$k])) {
             return "$k must be a string";
         }
+    }
+    if (isset($data['model']) && !is_string($data['model']) && !is_array($data['model'])) {
+        return 'model must be a string or object';
     }
     if (isset($data['tokens']) && !is_array($data['tokens'])) {
         return 'tokens must be an object';
