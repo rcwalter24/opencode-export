@@ -336,7 +336,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monosp
 .editing .part > .part-tool, .editing .part > .part-reasoning, .editing .part > .part-unknown, .editing .part > .part-compaction { margin-right: 0; }
 .part + .part > .part-text { margin-top: .75rem; }
 .ed-editor { margin: .5rem 0; }
-.ed-editor textarea { width: 100%; min-height: 8rem; max-height: 60vh; font-family: "SFMono-Regular", Consolas, Menlo, monospace;
+.ed-editor textarea { width: 100%; min-height: 14rem; max-height: 80vh; resize: vertical; font-family: "SFMono-Regular", Consolas, Menlo, monospace;
   font-size: .82rem; padding: .5rem; border: 1px solid var(--accent); border-radius: 6px; background: var(--bg); color: var(--text); }
 .ed-editor .ed-actions { display: flex; gap: .4rem; margin-top: .4rem; align-items: center; font-size: .8rem; color: var(--text-muted); }
 .ed-editor .ed-actions select { font-size: .8rem; padding: .2rem; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
@@ -642,8 +642,10 @@ dialog .link { font-family: monospace; word-break: break-all; }
         var ta = document.createElement('textarea');
         var sel = document.createElement('select');
         fields.forEach(function (f) { var o = document.createElement('option'); o.value = f; o.textContent = f; sel.appendChild(o); });
-        var load = function () { ta.value = p[sel.value] == null ? '' : p[sel.value]; };
-        sel.addEventListener('change', load); load();
+        // size the box to its content (capped by CSS max-height) so long messages are readable at once
+        var fit = function () { ta.style.height = 'auto'; ta.style.height = (ta.scrollHeight + 4) + 'px'; };
+        var load = function () { ta.value = p[sel.value] == null ? '' : p[sel.value]; fit(); };
+        sel.addEventListener('change', load); ta.addEventListener('input', fit);
         var save = document.createElement('button'); save.type = 'button'; save.className = 'primary'; save.textContent = 'Save';
         var cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Cancel';
         var act = document.createElement('div'); act.className = 'ed-actions';
@@ -651,7 +653,7 @@ dialog .link { font-family: monospace; word-break: break-all; }
         act.appendChild(save); act.appendChild(cancel);
         box.appendChild(ta); box.appendChild(act);
         part.insertBefore(box, part.children[1] || null);
-        ta.focus();
+        load(); ta.focus();
         cancel.addEventListener('click', function () { box.remove(); });
         save.addEventListener('click', function () {
           save.disabled = true;
