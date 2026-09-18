@@ -205,7 +205,12 @@ Viewers opening the link get a password prompt; once unlocked, the page stays un
 curl -u :PASSWORD https://share.example.com/s/AbCdEf/raw
 ```
 
-Re-uploading the same session **without** a password flag keeps the existing protection; `-p` replaces the password and `--clear-password` makes the page public again. Changing or clearing the password invalidates every browser that had unlocked it. Passwords are stored as bcrypt hashes and never written into the payload. Wrong guesses are throttled per IP (10 per 15 minutes by default).
+Re-uploading the same session **without** a password flag keeps the existing protection; `-p` replaces the password and `--clear-password` makes the page public again. You can also change it later without re-uploading — from the admin page (🔑 button on each row) or with:
+
+```bash
+opencode-export password <slug|url>            # prompts for a new password
+opencode-export password <slug|url> --clear    # make it public again
+``` Changing or clearing the password invalidates every browser that had unlocked it. Passwords are stored as bcrypt hashes and never written into the payload. Wrong guesses are throttled per IP (10 per 15 minutes by default).
 
 ### Manage shared sessions
 
@@ -254,6 +259,7 @@ Leave both fields empty to disable this feature entirely — sessions are still 
 | `GET` | `/api/sessions` | Bearer | List all shared sessions (each with a `protected` flag) |
 | `DELETE` | `/api/sessions` | Bearer | Delete all shared sessions |
 | `DELETE` | `/api/share/:slug` | Bearer or admin cookie | Delete one session by slug |
+| `PUT` | `/api/share/:slug/password` | Bearer or admin cookie | Body `{"password": "..."}` sets/replaces, `{"password": null}` removes |
 | `GET` | `/s/:slug` | Public / password | View session as HTML (shows an unlock form when protected) |
 | `POST` | `/s/:slug/unlock` | — | Submit the password; sets an unlock cookie scoped to `/s/:slug` |
 | `GET` | `/s/:slug/raw` | Public / Basic / Bearer | Raw JSON payload. Protected shares accept `Authorization: Basic` (any user, the share password) or the Bearer token |

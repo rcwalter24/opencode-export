@@ -50,6 +50,23 @@ tr:hover td { background: var(--bg-alt); }
 .del-btn { background: none; border: none; color: var(--text-muted); cursor: pointer;
            font-size: .85rem; padding: 0; }
 .del-btn:hover { color: var(--error); }
+.pw-btn { background: none; border: none; color: var(--text-muted); cursor: pointer;
+          font-size: .85rem; padding: 0; margin-right: .6rem; }
+.pw-btn:hover { color: var(--accent); }
+dialog { background: var(--bg-card, var(--bg)); color: var(--text); border: 1px solid var(--border);
+         border-radius: 10px; padding: 1.5rem 1.5rem 1.25rem; width: min(92vw, 380px); box-shadow: var(--shadow); }
+dialog::backdrop { background: rgba(0,0,0,.45); }
+dialog h2 { font-size: 1rem; margin: 0 0 .25rem; }
+dialog .hint { font-size: .82rem; color: var(--text-muted); margin: 0 0 1rem; word-break: break-word; }
+dialog label { display: block; font-size: .8rem; font-weight: 600; color: var(--text-muted); margin-bottom: .35rem; }
+dialog input[type=password] { width: 100%; font-size: 1rem; padding: .5rem .65rem; border: 1px solid var(--border);
+         border-radius: 6px; background: var(--bg); color: var(--text); }
+dialog .actions { display: flex; gap: .5rem; margin-top: 1rem; flex-wrap: wrap; }
+dialog button { padding: .45rem .9rem; font-size: .85rem; border-radius: 6px; cursor: pointer;
+         border: 1px solid var(--border); background: var(--bg-alt); color: var(--text); }
+dialog button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+dialog button.danger  { color: var(--error); margin-left: auto; }
+dialog .error { color: var(--error); font-size: .82rem; margin: .6rem 0 0; }
 @media (max-width: 600px) {
   th.hide-mobile, td.hide-mobile { display: none; }
   .title-cell { max-width: 160px; }
@@ -79,12 +96,14 @@ tr:hover td { background: var(--bg-alt); }
     <tbody>
     <?php foreach ($rows as $r): ?>
       <tr id="row-<?= h($r['slug']) ?>">
-        <td class="title-cell"><?= h($r['title']) ?><?php if (!empty($r['password_hash'])): ?><span class="lock" title="Password protected">&#x1F512;</span><?php endif; ?></td>
+        <td class="title-cell"><?= h($r['title']) ?><span class="lock" title="Password protected"<?= empty($r['password_hash']) ? ' hidden' : '' ?>>&#x1F512;</span></td>
         <td class="slug-cell hide-mobile"><?= h($r['slug']) ?></td>
         <td class="date-cell hide-mobile"><?= format_ts($r['updated_at']) ?></td>
         <td class="links-cell">
           <a href="<?= h($base . '/s/' . $r['slug']) ?>"
              target="_blank" rel="noopener noreferrer">open</a>
+          <button class="pw-btn" data-slug="<?= h($r['slug']) ?>" data-title="<?= h($r['title']) ?>"
+                  data-protected="<?= empty($r['password_hash']) ? '0' : '1' ?>" title="Password">&#x1F511;</button>
           <button class="del-btn" data-slug="<?= h($r['slug']) ?>" title="Delete">&#x1F5D1;</button>
         </td>
       </tr>
@@ -133,7 +152,70 @@ tr:hover td { background: var(--bg-alt); }
   <?php endif; ?>
 </div>
 
+<dialog id="pw-dialog">
+  <form method="dialog" id="pw-form" autocomplete="off">
+    <h2 id="pw-heading">Password</h2>
+    <p class="hint" id="pw-hint"></p>
+    <label for="pw-input">New password (4–72 characters)</label>
+    <input type="password" id="pw-input" autocomplete="new-password" minlength="4" maxlength="72">
+    <p class="error" id="pw-error" hidden></p>
+    <div class="actions">
+      <button type="submit" class="primary" value="set">Save</button>
+      <button type="button" value="cancel" id="pw-cancel">Cancel</button>
+      <button type="button" class="danger" value="clear" id="pw-clear">Remove password</button>
+    </div>
+  </form>
+</dialog>
+
 <script nonce="<?= $nonce ?>">
+(function () {
+  var dlg = document.getElementById('pw-dialog'), form = document.getElementById('pw-form');
+  var input = document.getElementById('pw-input'), err = document.getElementById('pw-error');
+  var clearBtn = document.getElementById('pw-clear'), current = null;
+
+  function api(slug, password) {
+    return fetch('/api/share/' + encodeURIComponent(slug) + '/password', {
+      method: 'PUT', credentials: 'same-origin',
+      headers: { 'X-Requested-With': 'opencode-share', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: password })
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); });
+  }
+  function showError(msg) { err.textContent = msg; err.hidden = false; }
+  function applyState(btn, isProtected) {
+    btn.dataset.protected = isProtected ? '1' : '0';
+    var lock = btn.closest('tr').querySelector('.lock');
+    if (lock) lock.hidden = !isProtected;
+  }
+
+  document.querySelectorAll('.pw-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      current = btn;
+      var prot = btn.dataset.protected === '1';
+      document.getElementById('pw-heading').textContent = prot ? 'Change password' : 'Set password';
+      document.getElementById('pw-hint').textContent = btn.dataset.title + ' (' + btn.dataset.slug + ')';
+      clearBtn.hidden = !prot;
+      input.value = ''; err.hidden = true;
+      dlg.showModal(); input.focus();
+    });
+  });
+  document.getElementById('pw-cancel').addEventListener('click', function () { dlg.close(); });
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (input.value.length < 4) { showError('Password must be at least 4 characters.'); return; }
+    api(current.dataset.slug, input.value).then(function (r) {
+      if (!r.ok) { showError(r.status === 401 ? 'Session expired — sign in again.' : (r.body.error || 'HTTP ' + r.status)); return; }
+      applyState(current, r.body.protected); dlg.close();
+    }).catch(function () { showError('Network error'); });
+  });
+  clearBtn.addEventListener('click', function () {
+    if (!confirm('Remove the password? The page becomes public.')) return;
+    api(current.dataset.slug, null).then(function (r) {
+      if (!r.ok) { showError(r.body.error || 'HTTP ' + r.status); return; }
+      applyState(current, false); dlg.close();
+    }).catch(function () { showError('Network error'); });
+  });
+})();
+
 document.querySelectorAll('.del-btn').forEach(function (btn) {
   btn.addEventListener('click', function () {
     var slug = btn.getAttribute('data-slug');

@@ -259,6 +259,32 @@ if ($method === 'DELETE' && preg_match('#^/api/share/(' . SLUG_RE . ')$#', $uri,
     exit;
 }
 
+// ---- PUT /api/share/:slug/password  (set / replace / remove the share password) ----
+if ($method === 'PUT' && preg_match('#^/api/share/(' . SLUG_RE . ')/password$#', $uri, $m)) {
+    auth_check_api_or_admin($cfg);
+
+    $body = json_decode((string)file_get_contents('php://input', false, null, 0, 4096), true);
+    if (!is_array($body) || !array_key_exists('password', $body)) {
+        json_error(400, 'body must be {"password": "..."} or {"password": null}');
+    }
+    $password = $body['password'];
+    $hash = null;
+    if ($password !== null && $password !== '') {
+        if (($err = share_password_validate($password)) !== null) {
+            json_error(400, $err);
+        }
+        $hash = share_password_hash($password);
+    }
+
+    $pdo = db_connect($cfg);
+    $row = share_lookup($pdo, $m[1]);
+    if (!$row) {
+        json_error(404, 'not found');
+    }
+    $pdo->prepare("UPDATE share SET password_hash = ? WHERE slug = ?")->execute([$hash, $row['slug']]);
+    json(200, ['slug' => $row['slug'], 'protected' => $hash !== null]);
+}
+
 // ---- GET /s/:slug/raw  (raw JSON payload for machine consumption) ----
 if (($method === 'GET' || $method === 'HEAD') && preg_match('#^/s/(' . SLUG_RE . ')/raw$#', $uri, $m)) {
     $pdo = db_connect($cfg);

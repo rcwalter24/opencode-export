@@ -9,6 +9,8 @@
 #   upload <session_id> [-p]      Upload session to share server, print URL
 #                                 -p prompts for a password to protect the page
 #   shares [-s <keyword>] [-n N]  List sessions already shared on the server
+#   password <slug|url> [-p|--clear]
+#                                 Set, change or remove a share's password
 #   delete <slug|url>             Delete a shared session by slug or URL
 #   purge                         Delete ALL shared sessions from the server
 #
@@ -48,6 +50,10 @@ Usage:
   $(basename "$0") shares [-s <keyword>] [-n <count>]
         List sessions already shared on the server.
         -s filters by title, -n limits output (default: all).
+
+  $(basename "$0") password <slug|url> [-p | --password-stdin | --clear]
+        Set or change the password of an existing share (-p prompts, default),
+        or remove it with --clear.
 
   $(basename "$0") delete <slug|url>
         Remove a shared session from the server.
@@ -262,6 +268,44 @@ SQL
     done <<< "$mids"
 }
 
+# Collect a share password into $2 according to mode $1 (prompt|stdin|clear).
+# An empty file means "remove the password".
+read_password() {
+    local mode="$1" out="$2" pw1 pw2
+    case "$mode" in
+        prompt)
+            { exec 3< /dev/tty; } 2>/dev/null || die "-p needs an interactive terminal (use --password-stdin for scripts)"
+            read -r -s -u 3 -p "Password for this share: " pw1; echo >&2
+            read -r -s -u 3 -p "Confirm password: "        pw2; echo >&2
+            exec 3<&-
+            [[ "$pw1" == "$pw2" ]] || die "passwords do not match"
+            [[ ${#pw1} -ge 4 ]]    || die "password must be at least 4 characters"
+            printf '%s' "$pw1" > "$out"
+            ;;
+        stdin)
+            IFS= read -r pw1 || true
+            [[ -n "$pw1" ]] || die "no password read from stdin"
+            printf '%s' "$pw1" > "$out"
+            ;;
+        clear)
+            printf '' > "$out"
+            ;;
+    esac
+}
+
+# Turn a share URL (any form: /s/x, /s/x/raw, ?page=) or bare slug into a slug.
+slug_from_arg() {
+    local slug="$1"
+    if [[ "$slug" == http* ]]; then
+        slug="${slug%%\?*}"
+        slug="${slug%/}"
+        slug="${slug%/raw}"
+        slug="${slug##*/}"
+    fi
+    [[ "$slug" =~ ^[A-Za-z0-9_-]+$ ]] || die "invalid slug format: $slug"
+    printf '%s' "$slug"
+}
+
 # ---------- upload (JSON payload, server renders HTML) ----------
 build_payload() {
     local sid="$1"
@@ -371,28 +415,7 @@ cmd_upload() {
     # Password handling. The password is passed to jq via a file inside the
     # private temp dir (never as an argument), and stripped by the server before
     # the payload is stored.
-    local pw1 pw2
-    case "$pw_mode" in
-        prompt)
-            { exec 3< /dev/tty; } 2>/dev/null || die "-p needs an interactive terminal (use --password-stdin for scripts)"
-            read -r -s -u 3 -p "Password for this share: " pw1; echo >&2
-            read -r -s -u 3 -p "Confirm password: "        pw2; echo >&2
-            exec 3<&-
-            [[ "$pw1" == "$pw2" ]] || die "passwords do not match"
-            [[ ${#pw1} -ge 4 ]]    || die "password must be at least 4 characters"
-            printf '%s' "$pw1" > "$pw_file"
-            unset pw1 pw2
-            ;;
-        stdin)
-            IFS= read -r pw1 || true
-            [[ -n "$pw1" ]] || die "no password read from stdin"
-            printf '%s' "$pw1" > "$pw_file"
-            unset pw1
-            ;;
-        clear)
-            printf '' > "$pw_file"
-            ;;
-    esac
+    [[ "$pw_mode" == "keep" ]] || read_password "$pw_mode" "$pw_file"
     if [[ "$pw_mode" != "keep" ]]; then
         jq --rawfile pw "$pw_file" '. + {password: (if $pw == "" then null else $pw end)}' \
             "$body_file" > "$body_file.tmp" && mv "$body_file.tmp" "$body_file"
@@ -524,23 +547,52 @@ cmd_purge() {
     esac
 }
 
+# ---------- password (set / change / remove on an existing share) ----------
+cmd_password() {
+    local slug="" pw_mode="prompt"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--password)    pw_mode="prompt"; shift ;;
+            --password-stdin) pw_mode="stdin";  shift ;;
+            --clear)          pw_mode="clear";  shift ;;
+            -*)               die "unknown option to password: $1" ;;
+            *)                [[ -z "$slug" ]] || die "unexpected argument: $1"; slug="$1"; shift ;;
+        esac
+    done
+    [[ -n "$slug" ]] || die "usage: password <slug|url> [-p | --password-stdin | --clear]"
+    need_server
+    slug=$(slug_from_arg "$slug")
+
+    tmp_dir; local tmpdir="$TMP_RESULT"
+    read_password "$pw_mode" "$tmpdir/password"
+    jq -n --rawfile pw "$tmpdir/password" '{password: (if $pw == "" then null else $pw end)}' > "$tmpdir/body.json"
+    rm -f "$tmpdir/password"
+
+    local http_code
+    http_code=$(api_call "$tmpdir/resp.json" -X PUT \
+        -H "Content-Type: application/json" \
+        --data-binary "@$tmpdir/body.json" \
+        "${SHARE_URL%/}/api/share/$slug/password") || die "request failed (curl error)"
+
+    case "$http_code" in
+        200)
+            if [[ "$(jq -r '.protected' < "$tmpdir/resp.json")" == "true" ]]; then
+                echo "✓ password set: ${SHARE_URL%/}/s/$slug  (raw JSON: curl -u :PASSWORD .../raw)"
+            else
+                echo "✓ password removed: ${SHARE_URL%/}/s/$slug is public again"
+            fi ;;
+        404) die "not found: $slug" ;;
+        *)   cat "$tmpdir/resp.json" >&2; echo >&2; die "failed (HTTP $http_code)" ;;
+    esac
+}
+
 # ---------- delete ----------
 cmd_delete() {
     local slug="${1:-}"
     [[ -n "$slug" ]] || die "usage: delete <slug|url>"
     need_server
 
-    if [[ "$slug" == http* ]]; then
-        slug="${slug%%\?*}"      # drop ?page=N
-        slug="${slug%/}"
-        slug="${slug%/raw}"      # accept the raw-JSON URL too
-        slug="${slug##*/}"
-    fi
-
-    # Sanity check: slug should be a short token, not contain slashes/spaces
-    if [[ ! "$slug" =~ ^[A-Za-z0-9_-]+$ ]]; then
-        die "invalid slug format: $slug"
-    fi
+    slug=$(slug_from_arg "$slug")
 
     local http_code
     http_code=$(api_call /dev/null -X DELETE "${SHARE_URL%/}/api/share/$slug") || die "delete failed (curl error)"
@@ -566,6 +618,7 @@ case "$sub" in
     shares)           cmd_shares "$@" ;;
     purge)            cmd_purge  "$@" ;;
     delete|rm)        cmd_delete "$@" ;;
+    password|pw)      cmd_password "$@" ;;
     ses_*)            cmd_show "$sub" ;;
     *)                die "unknown subcommand: $sub (try -h)" ;;
 esac
