@@ -12,3 +12,6 @@ server/app/data/*.db-wal
 # Editor
 .vscode/
 .idea/
+
+# Personal deployment script (server-specific, kept local)
+deploy.sh
