@@ -53,7 +53,8 @@ tr:hover td { background: var(--bg-alt); }
 .pw-btn { background: none; border: none; color: var(--text-muted); cursor: pointer;
           font-size: .85rem; padding: 0; margin-right: .6rem; }
 .pw-btn:hover { color: var(--accent); }
-dialog { background: var(--bg-card, var(--bg)); color: var(--text); border: 1px solid var(--border);
+/* the global reset zeroes margins; dialogs rely on margin:auto to be centred */
+dialog { margin: auto; inset: 0; background: var(--bg-card, var(--bg)); color: var(--text); border: 1px solid var(--border);
          border-radius: 10px; padding: 1.5rem 1.5rem 1.25rem; width: min(92vw, 380px); box-shadow: var(--shadow); }
 dialog::backdrop { background: rgba(0,0,0,.45); }
 dialog h2 { font-size: 1rem; margin: 0 0 .25rem; }
